@@ -164,6 +164,7 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
     heaptop_ring_init(&s_priv.trend[k], s_priv.trend_mem[k], HEAPTOP_TREND_LEN);
 
   const uint32_t caps = heaptop_buffer_caps();
+  const size_t free_before = heap_caps_get_free_size(caps);
   esp_err_t err = ESP_ERR_NO_MEM;
   s_priv.lock = xSemaphoreCreateMutex();
   s_priv.wake = xSemaphoreCreateBinary();
@@ -203,10 +204,13 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
   }
   s_priv.task = task;
 
+  /* Measured, allocator overhead included; other tasks allocating meanwhile can skew it. */
+  const size_t free_after = heap_caps_get_free_size(caps);
   ESP_LOGI(TAG,
-           "started: every %" PRIu32 " ms, up to %d tasks, buffers in %s",
+           "started: every %" PRIu32 " ms, up to %d tasks, %u bytes of buffers in %s",
            cfg.sample_period_ms,
            HEAPTOP_MAX_TASKS,
+           (unsigned)(free_before > free_after ? free_before - free_after : 0),
            (caps & MALLOC_CAP_SPIRAM) ? "PSRAM" : "internal RAM");
   return ESP_OK;
 
