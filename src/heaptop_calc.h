@@ -81,8 +81,9 @@ void heaptop_calc_hist_add(heaptop_frag_hist_t *h, uint32_t size);
 uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_t head, uint16_t count,
                                 heaptop_fail_t *out, uint16_t max);
 
-/** Minimum history before a task can be called a leak suspect. */
-#define HEAPTOP_LEAK_MIN_SAMPLES 8
+/** Minimum history before a task can be called a leak suspect. Shorter
+ *  histories flag the burst of allocations every app makes while starting up. */
+#define HEAPTOP_LEAK_MIN_SAMPLES 20
 /** Minimum separate increases in that history. */
 #define HEAPTOP_LEAK_MIN_RISES 3
 

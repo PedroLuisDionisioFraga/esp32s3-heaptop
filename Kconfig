@@ -18,11 +18,12 @@ menu "Heaptop"
 
     config HEAPTOP_HISTORY_LEN
         int "History length (samples)"
-        range 8 1024
+        range 20 1024
         default 120 if SPIRAM
         default 30
         help
-            Samples of per-task heap history used for leak suspicion. Costs
+            Samples of per-task heap history used for leak suspicion; a task
+            needs at least 20 before it can be flagged. Costs
             HEAPTOP_MAX_TASKS x 4 bytes per sample (15 KB for 32 tasks x 120),
             which is why chips without PSRAM default to 30 samples.
 

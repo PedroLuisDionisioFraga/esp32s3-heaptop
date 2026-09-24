@@ -313,64 +313,89 @@ static void test_leak_sort_by_bytes_descending(void)
   TEST_ASSERT_EQUAL_UINT32(10, g[2].bytes);
 }
 
+/* Histories of 21 samples (one per second): long enough for any minimum history rule. */
+#define HIST_N 21
+static uint32_t s_h[HIST_N];
+
+static void _steady(uint32_t start, uint32_t step)
+{
+  for (int i = 0; i < HIST_N; i++) s_h[i] = start + step * (uint32_t)i;
+}
+
 static void test_leak_suspect_steady_growth(void)
 {
-  const uint32_t v[] = {100, 200, 300, 400, 500, 600, 700, 800, 900};
   int32_t growth = 0;
-  TEST_ASSERT_TRUE(heaptop_calc_leak_suspect(v, 9, 500, &growth));
-  TEST_ASSERT_EQUAL_INT32(800, growth);
+  _steady(100, 100);
+  TEST_ASSERT_TRUE(heaptop_calc_leak_suspect(s_h, HIST_N, 500, &growth));
+  TEST_ASSERT_EQUAL_INT32(2000, growth);
 }
 
 static void test_leak_suspect_needs_enough_samples_and_growth(void)
 {
-  const uint32_t v[] = {100, 2000, 4000, 6000, 8000, 9000, 9500, 9900, 10000};
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 5, 500, NULL));
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 20000, NULL));
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 0, NULL));
+  _steady(100, 1000);
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, 5, 500, NULL));
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 30000, NULL));
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 0, NULL));
 }
 
 static void test_leak_suspect_ignores_dip_below_start(void)
 {
-  const uint32_t v[] = {500, 400, 600, 800, 1000, 1200, 1300, 1400, 1500};
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 500, NULL));
+  _steady(400, 100);
+  s_h[0] = 500;
+  s_h[1] = 400; /* below where it started */
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 500, NULL));
 }
 
 static void test_leak_suspect_ignores_memory_given_back(void)
 {
-  const uint32_t v[] = {100, 1000, 2000, 3000, 4000, 5000, 5000, 5000, 2000};
   int32_t growth = 0;
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 1000, &growth));
-  TEST_ASSERT_EQUAL_INT32(1900, growth);
+  _steady(100, 1000);
+  s_h[HIST_N - 1] = 8100; /* peaked at 19100, gave most of it back */
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 1000, &growth));
+  TEST_ASSERT_EQUAL_INT32(8000, growth);
 }
 
 static void test_leak_suspect_ignores_one_step_then_flat(void)
 {
   /* A task that allocates one long-lived buffer (a driver, a worker's stack). */
-  const uint32_t v[] = {100, 5100, 5100, 5100, 5100, 5100, 5100, 5100, 5100};
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
+  _steady(5100, 0);
+  s_h[0] = 100;
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 4096, NULL));
 }
 
 static void test_leak_suspect_ignores_growth_that_stopped(void)
 {
   /* Start-up allocations in a few steps, then stable. */
-  const uint32_t v[] = {100, 2000, 4000, 6000, 6000, 6000, 6000, 6000, 6000};
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
+  _steady(6000, 0);
+  s_h[0] = 100;
+  s_h[1] = 2000;
+  s_h[2] = 4000;
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 4096, NULL));
 }
 
 static void test_leak_suspect_ignores_boot_step_then_small_growth(void)
 {
   /* Seen on hardware: `main` after boot (+29 KB in one step), then console
    * history adding a few hundred bytes per command. */
-  const uint32_t v[] = {1000, 30000, 30100, 30200, 30300, 30400, 30500, 30600, 30700};
-  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
+  _steady(30000, 100);
+  s_h[0] = 1000;
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(s_h, HIST_N, 4096, NULL));
 }
 
 static void test_leak_suspect_catches_staircase_leak(void)
 {
-  const uint32_t v[] = {100, 100, 1100, 1100, 2100, 2100, 3100, 3100, 4100, 4100, 5100};
   int32_t growth = 0;
-  TEST_ASSERT_TRUE(heaptop_calc_leak_suspect(v, 11, 4096, &growth));
-  TEST_ASSERT_EQUAL_INT32(5000, growth);
+  for (int i = 0; i < HIST_N; i++) s_h[i] = 100 + 1000u * (uint32_t)(i / 2);
+  TEST_ASSERT_TRUE(heaptop_calc_leak_suspect(s_h, HIST_N, 4096, &growth));
+  TEST_ASSERT_EQUAL_INT32(10000, growth);
+}
+
+static void test_leak_suspect_ignores_setup_burst_right_after_boot(void)
+{
+  /* Seen on hardware: 9 s after boot, `main` had grown in every third of its
+   * short history (boot, then stress frag, then ht leaks start and a new task). */
+  const uint32_t v[] = {1000, 30000, 30100, 30200, 37200, 37300, 37400, 51400, 55500};
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
 }
 
 static void test_growth_track_reuses_and_claims_slots(void)
@@ -581,6 +606,7 @@ int main(void)
   RUN_TEST(test_leak_suspect_ignores_growth_that_stopped);
   RUN_TEST(test_leak_suspect_ignores_boot_step_then_small_growth);
   RUN_TEST(test_leak_suspect_catches_staircase_leak);
+  RUN_TEST(test_leak_suspect_ignores_setup_burst_right_after_boot);
   RUN_TEST(test_growth_track_reuses_and_claims_slots);
   RUN_TEST(test_growth_track_evicts_task_not_seen_last_sample);
   RUN_TEST(test_bucket_boundaries);

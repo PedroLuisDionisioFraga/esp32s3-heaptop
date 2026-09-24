@@ -66,7 +66,7 @@ def test_heaptop_leak_capture_groups_by_call_stack(dut: Dut) -> None:
 def test_heaptop_flags_leaking_task(dut: Dut) -> None:
     _ready(dut)
     _run(dut, 'stress leak 512 100')
-    time.sleep(12)  # >= 8 samples and > 4 KB of growth
+    time.sleep(24)  # a task needs >= 20 samples of history, and > 4 KB of growth, to be flagged
     _run(dut, 'ht tasks heap')
     dut.expect(re.compile(rb'stress_leak[^\r\n]*LEAK\?'))
     _run(dut, 'stress stop')
