@@ -54,23 +54,11 @@ uint16_t heaptop_calc_pct10(uint64_t part, uint64_t whole);
 /** @brief Busy share of a core from its idle task's run time: 1000 - idle%. */
 uint16_t heaptop_calc_busy_pct10(uint64_t idle_delta, uint64_t wall_delta);
 
-/** @brief Events per second from a count over @p dt_ms; 0 when @p dt_ms is 0. */
-uint32_t heaptop_calc_rate_per_s(uint32_t delta, uint32_t dt_ms);
-
-/** @brief Difference of two free-running 32-bit counters, correct across one wrap. */
-uint32_t heaptop_calc_delta_u32(uint32_t now, uint32_t prev);
-
 /**
  * @brief Look up a task's previous counter.
  * @return true and *@p counter when @p handle is in @p prev.
  */
 bool heaptop_calc_prev_find(const heaptop_calc_prev_t *prev, size_t n, uintptr_t handle, uint64_t *counter);
-
-/** @brief Histogram bucket of a free block: 0 (<64) .. HEAPTOP_FRAG_BUCKETS-1 (>=64K). */
-uint8_t heaptop_calc_bucket(uint32_t size);
-
-/** @brief Add one free block to a histogram. */
-void heaptop_calc_hist_add(heaptop_frag_hist_t *h, uint32_t size);
 
 /**
  * @brief Copy failure records from a ring, newest first.
@@ -86,18 +74,6 @@ uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_
 #define HEAPTOP_LEAK_MIN_SAMPLES 20
 /** Minimum separate increases in that history. */
 #define HEAPTOP_LEAK_MIN_RISES 3
-
-/**
- * @brief Add one surviving allocation to the group with the same call stack.
- *
- * @param pc Callers, innermost first; only the first min(depth, HEAPTOP_LEAK_DEPTH) are compared.
- * @return false when a new group was needed and the table is full.
- */
-bool heaptop_calc_leak_add(heaptop_leak_group_t *groups, size_t cap, size_t *n, const uintptr_t *pc, size_t depth,
-                           uint32_t size);
-
-/** @brief Sort leak groups by bytes, largest first. */
-void heaptop_calc_leak_sort(heaptop_leak_group_t *groups, size_t n);
 
 /**
  * @brief Does a heap history (oldest first) look like a leak?
@@ -117,6 +93,9 @@ typedef struct heaptop_growth_slot
   uintptr_t handle; /* 0 = free */
   uint32_t seen;    /* sample number of the last update */
   heaptop_ring_t ring;
+  bool rebase;        /* heaptop_growth_clear() ran: take the next IDF peak as peak_base */
+  uint32_t peak_base; /* IDF peak when the stats were cleared; 0 = never cleared */
+  uint32_t peak_max;  /* highest sampled heap since the slot was claimed or cleared */
 } heaptop_growth_slot_t;
 
 /** Fixed table of per-task histories over caller memory. */
@@ -132,14 +111,30 @@ void heaptop_growth_init(heaptop_growth_t *g, heaptop_growth_slot_t *slots, uint
                          uint16_t window);
 
 /**
- * @brief History ring for @p handle at sample @p seq.
+ * @brief History slot for @p handle at sample @p seq.
  *
  * Reuses the task's slot, else claims a free one or one whose task was not seen
  * in the previous sample (its history restarts empty).
  *
  * @return NULL when every slot belongs to a task that is still alive.
  */
-heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq);
+heaptop_growth_slot_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq);
+
+/** @brief Empty every history and mark each slot to take a new peak baseline. */
+void heaptop_growth_clear(heaptop_growth_t *g);
+
+/**
+ * @brief A task's peak heap since the stats were cleared.
+ *
+ * IDF only keeps the peak since boot. If it rose past @p base (its value at the
+ * clear), the task set a new record after the clear and that record is exact.
+ * Otherwise the highest sampled value, @p max_cur, is the best estimate.
+ * With @p base 0 (never cleared) this is the IDF peak.
+ */
+uint32_t heaptop_calc_peak_since(uint32_t base, uint32_t max_cur, uint32_t idf_peak);
+
+/** How far back past its limit a value must go before its alert clears, in percent. */
+#define HEAPTOP_HYSTERESIS_PCT 10
 
 /**
  * @brief Floor alert with hysteresis.
@@ -153,7 +148,7 @@ bool heaptop_calc_below_floor(bool active, uint32_t value, uint32_t floor, uint3
 bool heaptop_calc_above_ceiling(bool active, uint32_t value, uint32_t ceiling, uint32_t hyst_pct);
 
 /**
- * @brief Alert bits for a snapshot.
+ * @brief Alert bits for a snapshot, with HEAPTOP_HYSTERESIS_PCT.
  *
  * @param active Bits active after the previous sample (for hysteresis).
  * @param prev_failures Failure count of the previous sample.

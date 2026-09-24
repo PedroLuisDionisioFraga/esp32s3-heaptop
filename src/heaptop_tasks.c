@@ -13,7 +13,7 @@
 #include "freertos/task.h"
 #include "heaptop_calc.h"
 #include "heaptop_priv.h"
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
 #include "esp_heap_task_info.h"
 #endif
 
@@ -26,6 +26,14 @@
  * share only loses its PSRAM split (heap_stat NULL), never its totals. */
 #define HEAPTOP_HEAPS_PER_TASK 4
 
+/* Per-task heap history for leak suspicion: HEAPTOP_MAX_TASKS x 4 bytes per
+ * sample, so chips without PSRAM keep a shorter window. */
+#if CONFIG_SPIRAM
+#define HEAPTOP_HISTORY_LEN 120
+#else
+#define HEAPTOP_HISTORY_LEN 30
+#endif
+
 #define HEAPTOP_HAS_RUNTIME_STATS (configGENERATE_RUN_TIME_STATS == 1)
 
 typedef struct heaptop_tasks_priv
@@ -34,11 +42,11 @@ typedef struct heaptop_tasks_priv
   TaskStatus_t *status;
   heaptop_calc_prev_t *prev; /* run-time counters from the previous sample */
   heaptop_calc_prev_t *cur;  /* counters of this sample; swapped with prev */
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
   task_stat_t *tstat;
   heap_stat_t *hstat;
   heaptop_heap_owner_t *owners;        /* tstat reduced for heaptop_calc_merge_heap() */
-  heaptop_growth_slot_t *growth_slots; /* per-task heap history for leak suspicion */
+  heaptop_growth_slot_t *growth_slots; /* per-task heap history and peak since clear */
   uint32_t *growth_mem;
   uint32_t *history; /* scratch: one task's history, oldest first */
   heaptop_growth_t growth;
@@ -61,13 +69,13 @@ esp_err_t heaptop_tasks_init(uint32_t caps)
   s_tasks.prev = heap_caps_calloc(HEAPTOP_STATUS_CAP, sizeof(heaptop_calc_prev_t), caps);
   s_tasks.cur = heap_caps_calloc(HEAPTOP_STATUS_CAP, sizeof(heaptop_calc_prev_t), caps);
   bool ok = s_tasks.status && s_tasks.prev && s_tasks.cur;
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
   s_tasks.tstat = heap_caps_calloc(HEAPTOP_TSTAT_CAP, sizeof(task_stat_t), caps);
   s_tasks.hstat = heap_caps_calloc(HEAPTOP_TSTAT_CAP * HEAPTOP_HEAPS_PER_TASK, sizeof(heap_stat_t), caps);
   s_tasks.owners = heap_caps_calloc(HEAPTOP_TSTAT_CAP, sizeof(heaptop_heap_owner_t), caps);
   s_tasks.growth_slots = heap_caps_calloc(HEAPTOP_MAX_TASKS, sizeof(heaptop_growth_slot_t), caps);
-  s_tasks.growth_mem = heap_caps_calloc((size_t)HEAPTOP_MAX_TASKS * CONFIG_HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
-  s_tasks.history = heap_caps_calloc(CONFIG_HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
+  s_tasks.growth_mem = heap_caps_calloc((size_t)HEAPTOP_MAX_TASKS * HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
+  s_tasks.history = heap_caps_calloc(HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
   ok = ok && s_tasks.tstat && s_tasks.hstat && s_tasks.owners && s_tasks.growth_slots && s_tasks.growth_mem &&
        s_tasks.history;
 #endif
@@ -76,12 +84,12 @@ esp_err_t heaptop_tasks_init(uint32_t caps)
     heaptop_tasks_deinit();
     return ESP_ERR_NO_MEM;
   }
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
   heaptop_growth_init(&s_tasks.growth,
                       s_tasks.growth_slots,
                       HEAPTOP_MAX_TASKS,
                       s_tasks.growth_mem,
-                      CONFIG_HEAPTOP_HISTORY_LEN);
+                      HEAPTOP_HISTORY_LEN);
 #endif
 #if !CONFIG_FREERTOS_SMP
   for (int c = 0; c < portNUM_PROCESSORS && c < HEAPTOP_MAX_CORES; c++)
@@ -95,7 +103,7 @@ void heaptop_tasks_deinit(void)
   heap_caps_free(s_tasks.status);
   heap_caps_free(s_tasks.prev);
   heap_caps_free(s_tasks.cur);
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
   heap_caps_free(s_tasks.tstat);
   heap_caps_free(s_tasks.hstat);
   heap_caps_free(s_tasks.owners);
@@ -199,7 +207,7 @@ static void _sample_cpu_and_stack(heaptop_snapshot_t *s)
 #endif
 }
 
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
 static void _sample_task_heap(heaptop_snapshot_t *s)
 {
   heap_all_tasks_stat_t all = {
@@ -240,11 +248,13 @@ static void _sample_task_heap(heaptop_snapshot_t *s)
 }
 #endif
 
-#if CONFIG_HEAPTOP_TASK_HEAP
-/* Push each task's heap into its history and flag steady, unreleased growth. */
-static void _update_leak_suspicion(heaptop_snapshot_t *s)
+#if CONFIG_HEAP_TASK_TRACKING
+/* Push each task's heap into its history, flag steady, unreleased growth, and
+ * turn IDF's since-boot peak into the peak since the last clear. */
+static void _track_history(heaptop_snapshot_t *s)
 {
-  const uint32_t growth_limit = heaptop_alerts_task_growth();
+  heaptop_thresholds_t th;
+  heaptop_alerts_thresholds(&th);
   s_tasks.sample_no++;
   for (uint16_t i = 0; i < s->task_count; i++)
   {
@@ -252,21 +262,38 @@ static void _update_leak_suspicion(heaptop_snapshot_t *s)
     /* A dead task cannot grow, and its handle may already belong to a live one. */
     if (t->state == HEAPTOP_TASK_DELETED)
       continue;
-    heaptop_ring_t *ring = heaptop_growth_track(&s_tasks.growth, t->handle, s_tasks.sample_no);
-    if (ring == NULL)
+    heaptop_growth_slot_t *slot = heaptop_growth_track(&s_tasks.growth, t->handle, s_tasks.sample_no);
+    if (slot == NULL)
       continue;
-    heaptop_ring_push(ring, t->heap_cur);
-    const uint16_t n = heaptop_ring_copy(ring, s_tasks.history, CONFIG_HEAPTOP_HISTORY_LEN);
-    t->leak_suspect = heaptop_calc_leak_suspect(s_tasks.history, n, growth_limit, &t->heap_growth);
+    heaptop_ring_push(&slot->ring, t->heap_cur);
+    const uint16_t n = heaptop_ring_copy(&slot->ring, s_tasks.history, HEAPTOP_HISTORY_LEN);
+    t->leak_suspect = heaptop_calc_leak_suspect(s_tasks.history, n, th.task_growth, &t->heap_growth);
+
+    if (slot->rebase)
+    {
+      slot->peak_base = t->heap_peak;
+      slot->peak_max = 0;
+      slot->rebase = false;
+    }
+    if (t->heap_cur > slot->peak_max)
+      slot->peak_max = t->heap_cur;
+    t->heap_peak = heaptop_calc_peak_since(slot->peak_base, slot->peak_max, t->heap_peak);
   }
 }
 #endif
 
+void heaptop_tasks_clear(void)
+{
+#if CONFIG_HEAP_TASK_TRACKING
+  heaptop_growth_clear(&s_tasks.growth);
+#endif
+}
+
 void heaptop_tasks_sample(heaptop_snapshot_t *s)
 {
   _sample_cpu_and_stack(s);
-#if CONFIG_HEAPTOP_TASK_HEAP
+#if CONFIG_HEAP_TASK_TRACKING
   _sample_task_heap(s);
-  _update_leak_suspicion(s);
+  _track_history(s);
 #endif
 }

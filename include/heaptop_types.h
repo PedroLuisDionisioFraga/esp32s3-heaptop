@@ -13,23 +13,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#if defined(__has_include)
-#if __has_include("sdkconfig.h")
-#include "sdkconfig.h"
-#endif
-#endif
-
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
+/** Task rows per snapshot; define it for the whole build to change it. */
 #ifndef HEAPTOP_MAX_TASKS
-#ifdef CONFIG_HEAPTOP_MAX_TASKS
-#define HEAPTOP_MAX_TASKS CONFIG_HEAPTOP_MAX_TASKS
-#else
 #define HEAPTOP_MAX_TASKS 32
-#endif
 #endif
 
 #define HEAPTOP_TASK_NAME_LEN 16
@@ -66,9 +57,7 @@ typedef enum heaptop_sort
 /** Feature bits: which data sources were compiled in and are live. */
 #define HEAPTOP_FEAT_RUNTIME_STATS (1u << 0) /**< Per-task CPU % available */
 #define HEAPTOP_FEAT_TASK_HEAP     (1u << 1) /**< Per-task heap via task tracking */
-#define HEAPTOP_FEAT_ALLOC_HOOKS   (1u << 2) /**< Allocation/free counters */
-#define HEAPTOP_FEAT_FAIL_CB       (1u << 3) /**< Failed-allocation callback */
-#define HEAPTOP_FEAT_LEAK_TRACE    (1u << 4) /**< Leak capture via heap_trace */
+#define HEAPTOP_FEAT_FAIL_CB       (1u << 2) /**< Failed-allocation callback */
 
 /** Alert bits (heaptop_snapshot_t::alerts). */
 #define HEAPTOP_ALERT_DRAM_FREE    (1u << 0) /**< Internal RAM free below its floor */
@@ -89,7 +78,6 @@ typedef struct heaptop_thresholds
   uint32_t psram_free_min;   /**< bytes */
   uint32_t stack_hwm_min;    /**< bytes */
   uint32_t task_growth;      /**< bytes of heap growth that mark a leak suspect */
-  uint32_t hysteresis_pct;   /**< how far past the limit a value must go back to clear */
 } heaptop_thresholds_t;
 
 typedef struct heaptop_region_stats
@@ -115,31 +103,10 @@ typedef struct heaptop_task_stats
   uint16_t cpu_pct10;  /**< % of one core over the last interval */
   uint32_t stack_hwm;  /**< minimum free stack ever, bytes */
   uint32_t heap_cur;   /**< heap held now (internal + PSRAM) */
-  uint32_t heap_peak;  /**< peak heap held */
+  uint32_t heap_peak;  /**< peak heap held since boot, or since heaptop_clear() */
   uint32_t heap_psram; /**< part of heap_cur that lives in PSRAM */
   int32_t heap_growth; /**< heap_cur change over the history window */
 } heaptop_task_stats_t;
-
-typedef struct heaptop_alloc_stats
-{
-  uint32_t allocs_per_s;
-  uint32_t frees_per_s;
-  uint32_t bytes_per_s; /**< bytes allocated per second */
-  uint32_t failures;    /**< failed allocations since boot */
-} heaptop_alloc_stats_t;
-
-/** Free-block size buckets: <64, <256, <1K, <4K, <16K, <64K, >=64K. */
-#define HEAPTOP_FRAG_BUCKETS 7
-
-/** Free-block histogram of one region (from heap_caps_walk). */
-typedef struct heaptop_frag_hist
-{
-  uint32_t count[HEAPTOP_FRAG_BUCKETS];
-  uint32_t bytes[HEAPTOP_FRAG_BUCKETS];
-  uint32_t free_blocks;
-  uint32_t free_bytes;
-  uint32_t largest;
-} heaptop_frag_hist_t;
 
 /** One failed allocation, as reported by the IDF failed-allocation callback. */
 typedef struct heaptop_fail
@@ -151,31 +118,6 @@ typedef struct heaptop_fail
   uintptr_t task;   /**< task handle; resolve against the snapshot, never dereference */
   bool isr;         /**< failed inside an interrupt */
 } heaptop_fail_t;
-
-/** Call-stack depth kept per leak group. */
-#define HEAPTOP_LEAK_DEPTH 4
-
-/** Surviving allocations that share one call stack. */
-typedef struct heaptop_leak_group
-{
-  uintptr_t pc[HEAPTOP_LEAK_DEPTH]; /**< callers, innermost first; 0 = none */
-  uint32_t count;
-  uint32_t bytes;
-  uint32_t min_size;
-  uint32_t max_size;
-} heaptop_leak_group_t;
-
-/** State of the leak trace (heap_trace in HEAP_TRACE_LEAKS mode). */
-typedef struct heaptop_leak_info
-{
-  bool available; /**< heap tracing compiled in */
-  bool running;
-  uint32_t duration_ms; /**< since start, or start to stop */
-  uint32_t records;     /**< surviving allocations in the buffer */
-  uint32_t capacity;    /**< record buffer size */
-  bool overflowed;      /**< buffer filled up: results are incomplete */
-  uint32_t ungrouped;   /**< records whose call site did not fit in the group table */
-} heaptop_leak_info_t;
 
 /** Samples of history carried in each snapshot for sparklines. */
 #define HEAPTOP_TREND_LEN 40
@@ -192,6 +134,7 @@ typedef struct heaptop_snapshot
 {
   uint32_t seq; /**< increments every sample; 0 = no sample yet */
   uint64_t uptime_us;
+  uint64_t since_us;  /**< uptime of the last heaptop_clear(); 0 = stats since boot */
   uint32_t period_ms; /**< configured sampling period */
   uint32_t dt_ms;     /**< real time since the previous sample */
   uint32_t self_us;   /**< time heaptop spent taking this sample */
@@ -200,8 +143,8 @@ typedef struct heaptop_snapshot
   uint8_t num_cores;
   uint16_t core_load_pct10[HEAPTOP_MAX_CORES];
   heaptop_region_stats_t region[HEAPTOP_REGION_COUNT];
-  heaptop_alloc_stats_t alloc;
-  uint16_t trend_len;                                     /**< valid entries per trend series */
+  uint32_t failures;  /**< failed allocations since boot, or since heaptop_clear() */
+  uint16_t trend_len; /**< valid entries per trend series */
   uint32_t trend[HEAPTOP_TREND_COUNT][HEAPTOP_TREND_LEN]; /**< oldest first */
   uint16_t task_count;
   bool tasks_truncated; /**< more tasks existed than HEAPTOP_MAX_TASKS */

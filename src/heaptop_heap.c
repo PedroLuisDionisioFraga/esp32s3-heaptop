@@ -1,5 +1,3 @@
-#include <string.h>
-
 #include "esp_heap_caps.h"
 #include "heaptop_calc.h"
 #include "heaptop_priv.h"
@@ -10,24 +8,6 @@ static const uint32_t s_region_caps[HEAPTOP_REGION_COUNT] = {
   [HEAPTOP_REGION_DMA] = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA,
   [HEAPTOP_REGION_PSRAM] = MALLOC_CAP_SPIRAM,
 };
-
-/* Runs inside the heap's critical section: count only, never allocate or print. */
-static bool _walk_cb(walker_heap_into_t heap, walker_block_info_t block, void *user_data)
-{
-  (void)heap;
-  if (!block.used)
-    heaptop_calc_hist_add((heaptop_frag_hist_t *)user_data, (uint32_t)block.size);
-  return true;
-}
-
-void heaptop_heap_histogram(heaptop_region_t region, heaptop_frag_hist_t *h)
-{
-  memset(h, 0, sizeof(*h));
-  if (region >= HEAPTOP_REGION_COUNT)
-    return;
-  /* Raw TLSF blocks: sizes include block metadata, so buckets are approximate. */
-  heap_caps_walk(s_region_caps[region], _walk_cb, h);
-}
 
 void heaptop_heap_sample(heaptop_snapshot_t *s)
 {
@@ -47,4 +27,17 @@ void heaptop_heap_sample(heaptop_snapshot_t *s)
     rs->free_blocks = (uint32_t)info.free_blocks;
     rs->frag_pct10 = heaptop_calc_frag_pct10(rs->free, rs->largest);
   }
+}
+
+void heaptop_heap_clear_min(void)
+{
+  /* Every call resets each heap's minimum to its free size now; IDF keeps the
+   * since-boot values aside. The first call allocates that small table. */
+  (void)heap_caps_monitor_local_minimum_free_size_start();
+}
+
+void heaptop_heap_restore_min(void)
+{
+  /* Fails only when no clear ever ran: nothing to restore then. */
+  (void)heap_caps_monitor_local_minimum_free_size_stop();
 }
