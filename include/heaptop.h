@@ -119,8 +119,10 @@ esp_err_t heaptop_leaks_stop(void);
 /**
  * @brief Print the capture: surviving allocations grouped by call stack, largest first.
  *
- * Works while running (a live view) or after stop. Call-stack addresses are
- * decoded to file:line by idf.py monitor.
+ * Works after stop, or while running as a live view: then the capture is
+ * paused for the length of the report, so a block freed in that moment can
+ * still be listed as surviving. Call-stack addresses are decoded to file:line
+ * by idf.py monitor.
  *
  * @param out NULL for stdout.
  * @param max_groups Rows to print.

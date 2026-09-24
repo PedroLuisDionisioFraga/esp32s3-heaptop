@@ -132,7 +132,7 @@ esp_err_t heaptop_leaks_stop(void)
 #endif
 }
 
-/* Info and groups while holding lock. */
+/* Info and groups; the caller holds lock and tracing is stopped. */
 static void _collect(heaptop_leak_info_t *info, heaptop_leak_group_t *groups, size_t cap, size_t *n)
 {
   memset(info, 0, sizeof(*info));
@@ -180,30 +180,41 @@ esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups)
   if (out == NULL)
     out = stdout;
 
-  /* One temporary block for groups and text; if a capture is running it records
-   * this allocation too, but it is freed before returning. */
+  xSemaphoreTake(s_leaks.lock, portMAX_DELAY);
+
+  /* heap_trace_get() walks the record list with a cursor that a concurrent free
+   * can invalidate (IDF then asserts), and this report's own buffer would be
+   * recorded as a leak. So a running capture is stopped for the length of the
+   * report and resumed with its records intact. */
+#if CONFIG_HEAPTOP_LEAK_TRACE
+  const bool paused = s_leaks.running && heap_trace_stop() == ESP_OK;
+#endif
+
   const size_t groups_bytes = HEAPTOP_LEAK_GROUPS * sizeof(heaptop_leak_group_t);
   uint8_t *mem = heap_caps_malloc(groups_bytes + HEAPTOP_REPORT_BYTES, heaptop_buffer_caps());
-  ESP_RETURN_ON_FALSE(mem != NULL, ESP_ERR_NO_MEM, TAG, "no memory for the report");
+  esp_err_t err = ESP_OK;
+  if (mem == NULL)
+  {
+    ESP_LOGE(TAG, "no memory for the report");
+    err = ESP_ERR_NO_MEM;
+    goto out;
+  }
   heaptop_leak_group_t *groups = (heaptop_leak_group_t *)mem;
   char *text = (char *)mem + groups_bytes;
 
-  heaptop_leak_info_t info;
-  size_t n = 0;
   bool never_started = false;
-  xSemaphoreTake(s_leaks.lock, portMAX_DELAY);
 #if CONFIG_HEAPTOP_LEAK_TRACE
   never_started = s_leaks.records == NULL;
 #endif
-  _collect(&info, groups, HEAPTOP_LEAK_GROUPS, &n);
-  xSemaphoreGive(s_leaks.lock);
-
   if (never_started)
   {
     fputs("leak trace: never started; run `ht leaks start`, exercise the code, then `ht leaks stop`\n", out);
   }
   else
   {
+    heaptop_leak_info_t info;
+    size_t n = 0;
+    _collect(&info, groups, HEAPTOP_LEAK_GROUPS, &n);
     heaptop_buf_t b;
     heaptop_buf_init(&b, text, HEAPTOP_REPORT_BYTES);
     heaptop_render_leaks(&b, &info, groups, n < max_groups ? n : max_groups);
@@ -213,5 +224,12 @@ esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups)
   }
   fflush(out);
   heap_caps_free(mem);
-  return ESP_OK;
+
+out:
+#if CONFIG_HEAPTOP_LEAK_TRACE
+  if (paused)
+    heap_trace_resume();
+#endif
+  xSemaphoreGive(s_leaks.lock);
+  return err;
 }
