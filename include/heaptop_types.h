@@ -70,6 +70,28 @@ typedef enum heaptop_sort
 #define HEAPTOP_FEAT_FAIL_CB       (1u << 3) /**< Failed-allocation callback */
 #define HEAPTOP_FEAT_LEAK_TRACE    (1u << 4) /**< Leak capture via heap_trace */
 
+/** Alert bits (heaptop_snapshot_t::alerts). */
+#define HEAPTOP_ALERT_DRAM_FREE    (1u << 0) /**< Internal RAM free below its floor */
+#define HEAPTOP_ALERT_DRAM_LARGEST (1u << 1) /**< Largest internal free block below its floor */
+#define HEAPTOP_ALERT_FRAG         (1u << 2) /**< Internal RAM fragmentation above its ceiling */
+#define HEAPTOP_ALERT_PSRAM_FREE   (1u << 3) /**< PSRAM free below its floor */
+#define HEAPTOP_ALERT_STACK        (1u << 4) /**< Some task's stack high-water mark below its floor */
+#define HEAPTOP_ALERT_LEAK         (1u << 5) /**< Some task looks like it leaks */
+#define HEAPTOP_ALERT_ALLOC_FAIL   (1u << 6) /**< An allocation failed since the previous sample */
+#define HEAPTOP_ALERT_COUNT        7
+
+/** Alert limits. A limit of 0 turns that alert off. */
+typedef struct heaptop_thresholds
+{
+  uint32_t dram_free_min;    /**< bytes */
+  uint32_t dram_largest_min; /**< bytes */
+  uint32_t frag_pct_max;     /**< percent, 1..100 */
+  uint32_t psram_free_min;   /**< bytes */
+  uint32_t stack_hwm_min;    /**< bytes */
+  uint32_t task_growth;      /**< bytes of heap growth that mark a leak suspect */
+  uint32_t hysteresis_pct;   /**< how far past the limit a value must go back to clear */
+} heaptop_thresholds_t;
+
 typedef struct heaptop_region_stats
 {
   bool present;         /**< false when the region does not exist (e.g. no PSRAM) */

@@ -372,9 +372,101 @@ static void test_growth_track_evicts_task_not_seen_last_sample(void)
   TEST_ASSERT_EQUAL_UINT16(0, c->count);
 }
 
+static void test_below_floor_fires_and_clears_with_hysteresis(void)
+{
+  TEST_ASSERT_FALSE(heaptop_calc_below_floor(false, 1000, 1000, 10));
+  TEST_ASSERT_TRUE(heaptop_calc_below_floor(false, 999, 1000, 10));
+  TEST_ASSERT_TRUE(heaptop_calc_below_floor(true, 1050, 1000, 10));
+  TEST_ASSERT_FALSE(heaptop_calc_below_floor(true, 1100, 1000, 10));
+  TEST_ASSERT_FALSE(heaptop_calc_below_floor(false, 1, 0, 10));
+}
+
+static void test_above_ceiling_fires_and_clears_with_hysteresis(void)
+{
+  TEST_ASSERT_FALSE(heaptop_calc_above_ceiling(false, 800, 800, 10));
+  TEST_ASSERT_TRUE(heaptop_calc_above_ceiling(false, 801, 800, 10));
+  TEST_ASSERT_TRUE(heaptop_calc_above_ceiling(true, 750, 800, 10));
+  TEST_ASSERT_FALSE(heaptop_calc_above_ceiling(true, 720, 800, 10));
+  TEST_ASSERT_FALSE(heaptop_calc_above_ceiling(false, 1000, 0, 10));
+}
+
+static heaptop_snapshot_t s_asnap;
+
+static heaptop_thresholds_t _th(void)
+{
+  return (heaptop_thresholds_t){.dram_free_min = 20000,
+                                .dram_largest_min = 8000,
+                                .frag_pct_max = 80,
+                                .psram_free_min = 65536,
+                                .stack_hwm_min = 512,
+                                .task_growth = 4096,
+                                .hysteresis_pct = 10};
+}
+
+static void _healthy(void)
+{
+  memset(&s_asnap, 0, sizeof(s_asnap));
+  s_asnap.region[HEAPTOP_REGION_INTERNAL] =
+    (heaptop_region_stats_t){.present = true, .free = 100000, .largest = 60000, .frag_pct10 = 400};
+  s_asnap.region[HEAPTOP_REGION_PSRAM] = (heaptop_region_stats_t){.present = true, .free = 4000000};
+  s_asnap.task_count = 2;
+  s_asnap.tasks[0].stack_hwm = 2000;
+  s_asnap.tasks[1].stack_hwm = 3000;
+  s_asnap.features = HEAPTOP_FEAT_FAIL_CB;
+  s_asnap.alloc.failures = 5;
+}
+
+static void test_alerts_quiet_when_healthy(void)
+{
+  const heaptop_thresholds_t th = _th();
+  _healthy();
+  TEST_ASSERT_EQUAL_HEX32(0, heaptop_calc_alerts(&th, &s_asnap, 0, 5));
+}
+
+static void test_alerts_each_condition(void)
+{
+  const heaptop_thresholds_t th = _th();
+  _healthy();
+  s_asnap.region[HEAPTOP_REGION_INTERNAL].free = 15000;
+  s_asnap.region[HEAPTOP_REGION_INTERNAL].largest = 4000;
+  s_asnap.region[HEAPTOP_REGION_INTERNAL].frag_pct10 = 850;
+  s_asnap.region[HEAPTOP_REGION_PSRAM].free = 1000;
+  s_asnap.tasks[1].stack_hwm = 300;
+  s_asnap.tasks[0].leak_suspect = true;
+  s_asnap.alloc.failures = 6;
+  const uint32_t all = HEAPTOP_ALERT_DRAM_FREE | HEAPTOP_ALERT_DRAM_LARGEST | HEAPTOP_ALERT_FRAG |
+                       HEAPTOP_ALERT_PSRAM_FREE | HEAPTOP_ALERT_STACK | HEAPTOP_ALERT_LEAK | HEAPTOP_ALERT_ALLOC_FAIL;
+  TEST_ASSERT_EQUAL_HEX32(all, heaptop_calc_alerts(&th, &s_asnap, 0, 5));
+}
+
+static void test_alerts_skip_missing_psram_and_deleted_tasks(void)
+{
+  const heaptop_thresholds_t th = _th();
+  _healthy();
+  s_asnap.region[HEAPTOP_REGION_PSRAM] = (heaptop_region_stats_t){.present = false};
+  s_asnap.tasks[1].state = HEAPTOP_TASK_DELETED;
+  s_asnap.tasks[1].stack_hwm = 0;
+  TEST_ASSERT_EQUAL_HEX32(0, heaptop_calc_alerts(&th, &s_asnap, 0, 5));
+}
+
+static void test_alerts_keep_state_inside_hysteresis(void)
+{
+  const heaptop_thresholds_t th = _th();
+  _healthy();
+  s_asnap.region[HEAPTOP_REGION_INTERNAL].free = 21000;
+  TEST_ASSERT_EQUAL_HEX32(HEAPTOP_ALERT_DRAM_FREE, heaptop_calc_alerts(&th, &s_asnap, HEAPTOP_ALERT_DRAM_FREE, 5));
+  TEST_ASSERT_EQUAL_HEX32(0, heaptop_calc_alerts(&th, &s_asnap, 0, 5));
+}
+
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_below_floor_fires_and_clears_with_hysteresis);
+  RUN_TEST(test_above_ceiling_fires_and_clears_with_hysteresis);
+  RUN_TEST(test_alerts_quiet_when_healthy);
+  RUN_TEST(test_alerts_each_condition);
+  RUN_TEST(test_alerts_skip_missing_psram_and_deleted_tasks);
+  RUN_TEST(test_alerts_keep_state_inside_hysteresis);
   RUN_TEST(test_leak_add_groups_same_call_stack);
   RUN_TEST(test_leak_add_separates_call_stacks_and_zero_fills);
   RUN_TEST(test_leak_add_reports_full_table);

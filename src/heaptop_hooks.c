@@ -21,11 +21,10 @@
 
 #if CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK
 #define HEAPTOP_FAIL_LEN CONFIG_HEAPTOP_FAIL_RING_LEN
+static const char *TAG = "HEAPTOP";
 #else
 #define HEAPTOP_FAIL_LEN 1
 #endif
-
-static const char *TAG = "HEAPTOP";
 
 typedef struct heaptop_hooks_priv
 {

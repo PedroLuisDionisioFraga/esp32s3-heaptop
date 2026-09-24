@@ -6,7 +6,9 @@
 #ifndef HEAPTOP_PRIV_H
 #define HEAPTOP_PRIV_H
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "esp_err.h"
 #include "heaptop.h"
@@ -48,6 +50,35 @@ void heaptop_leaks_init(void);
 
 /** Stop a running leak capture; the record buffer is kept. */
 void heaptop_leaks_shutdown(void);
+
+/** Load the thresholds and reset alert state. */
+esp_err_t heaptop_alerts_init(const heaptop_thresholds_t *th);
+
+/** Evaluate alerts into s->alerts; log and call back on transitions. Sampler task only. */
+void heaptop_alerts_sample(heaptop_snapshot_t *s);
+
+/** Current leak-suspicion growth threshold, bytes. */
+uint32_t heaptop_alerts_task_growth(void);
+
+/** While quiet, transitions are not logged (the caller owns the terminal). */
+void heaptop_alerts_set_quiet(bool quiet);
+
+#if CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK
+#define HEAPTOP_EMIT_FAILS CONFIG_HEAPTOP_FAIL_RING_LEN
+#else
+#define HEAPTOP_EMIT_FAILS 1
+#endif
+
+/** Per-writer stream state: what was already emitted. */
+typedef struct heaptop_emit_state
+{
+  uint32_t alerts;
+  uint64_t last_fail_us;
+  heaptop_fail_t fails[HEAPTOP_EMIT_FAILS]; /* scratch */
+} heaptop_emit_state_t;
+
+/** Write one sample (sample, tasks, alert changes, new failures) as JSON Lines. @p buf holds one line. */
+void heaptop_emit(FILE *out, const heaptop_snapshot_t *s, heaptop_emit_state_t *st, char *buf, size_t len);
 
 #ifdef __cplusplus
 }

@@ -325,6 +325,16 @@ void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const hea
                      s_sort_names[sort],
                      view->paused ? "  PAUSED" : "");
   heaptop_buf_printf(b, "keys: q quit  c/m/s/n sort by cpu/memory/stack/name  +/- refresh  p pause\n");
+  if (s->alerts)
+  {
+    heaptop_buf_printf(b, "ALERTS:");
+    for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
+    {
+      if (s->alerts & (1u << i))
+        heaptop_buf_printf(b, " %s", heaptop_alert_name(1u << i));
+    }
+    heaptop_buf_printf(b, "  (ht alerts for details)\n");
+  }
 
   if (s->features & HEAPTOP_FEAT_RUNTIME_STATS)
     _core_bars(b, s);
@@ -582,4 +592,147 @@ void heaptop_render_diff(heaptop_buf_t *b, const heaptop_snapshot_t *before, con
   }
   if (!any)
     heaptop_buf_printf(b, "no per-task heap changes\n");
+}
+
+static const char *const s_alert_names[HEAPTOP_ALERT_COUNT] = {
+  "dram_free", "dram_largest", "frag", "psram_free", "stack", "leak", "alloc_fail"};
+
+const char *heaptop_alert_name(uint32_t alert)
+{
+  for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
+  {
+    if (alert == (1u << i))
+      return s_alert_names[i];
+  }
+  return "unknown";
+}
+
+/* Alive task with the lowest stack high-water mark, or NULL. */
+static const heaptop_task_stats_t *_lowest_stack(const heaptop_snapshot_t *s)
+{
+  const heaptop_task_stats_t *low = NULL;
+  for (uint16_t i = 0; i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    const heaptop_task_stats_t *t = &s->tasks[i];
+    if (t->state != HEAPTOP_TASK_DELETED && (low == NULL || t->stack_hwm < low->stack_hwm))
+      low = t;
+  }
+  return low;
+}
+
+/* Leak suspect that grew the most, or NULL. */
+static const heaptop_task_stats_t *_worst_leak(const heaptop_snapshot_t *s)
+{
+  const heaptop_task_stats_t *worst = NULL;
+  for (uint16_t i = 0; i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    const heaptop_task_stats_t *t = &s->tasks[i];
+    if (t->leak_suspect && (worst == NULL || t->heap_growth > worst->heap_growth))
+      worst = t;
+  }
+  return worst;
+}
+
+void heaptop_render_alert(char *out, size_t len, uint32_t alert, const heaptop_snapshot_t *s,
+                          const heaptop_thresholds_t *th)
+{
+  if (out == NULL || len == 0)
+    return;
+  out[0] = '\0';
+  if (s == NULL || th == NULL)
+    return;
+  const heaptop_region_stats_t *in = &s->region[HEAPTOP_REGION_INTERNAL];
+  char v[16], lim[16];
+  switch (alert)
+  {
+    case HEAPTOP_ALERT_DRAM_FREE:
+      heaptop_fmt_bytes(v, sizeof(v), in->free);
+      heaptop_fmt_bytes(lim, sizeof(lim), th->dram_free_min);
+      snprintf(out, len, "internal RAM free %s below %s", v, lim);
+      break;
+    case HEAPTOP_ALERT_DRAM_LARGEST:
+      heaptop_fmt_bytes(v, sizeof(v), in->largest);
+      heaptop_fmt_bytes(lim, sizeof(lim), th->dram_largest_min);
+      snprintf(out, len, "largest internal free block %s below %s", v, lim);
+      break;
+    case HEAPTOP_ALERT_FRAG:
+      _pct(v, sizeof(v), in->frag_pct10);
+      snprintf(out, len, "internal RAM fragmentation %s above %lu%%", v, (unsigned long)th->frag_pct_max);
+      break;
+    case HEAPTOP_ALERT_PSRAM_FREE:
+      heaptop_fmt_bytes(v, sizeof(v), s->region[HEAPTOP_REGION_PSRAM].free);
+      heaptop_fmt_bytes(lim, sizeof(lim), th->psram_free_min);
+      snprintf(out, len, "PSRAM free %s below %s", v, lim);
+      break;
+    case HEAPTOP_ALERT_STACK:
+    {
+      const heaptop_task_stats_t *t = _lowest_stack(s);
+      if (t)
+        snprintf(out,
+                 len,
+                 "task '%s' has %lu bytes of stack left (floor %lu)",
+                 t->name,
+                 (unsigned long)t->stack_hwm,
+                 (unsigned long)th->stack_hwm_min);
+      break;
+    }
+    case HEAPTOP_ALERT_LEAK:
+    {
+      const heaptop_task_stats_t *t = _worst_leak(s);
+      if (t)
+      {
+        _fmt_signed(v, sizeof(v), t->heap_growth);
+        snprintf(out, len, "task '%s' heap grew %s without giving memory back", t->name, v);
+      }
+      break;
+    }
+    case HEAPTOP_ALERT_ALLOC_FAIL:
+      snprintf(out, len, "allocation failed (%lu since boot, see ht allocs)", (unsigned long)s->alloc.failures);
+      break;
+    default:
+      snprintf(out, len, "unknown alert 0x%lx", (unsigned long)alert);
+      break;
+  }
+}
+
+void heaptop_render_alerts(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_thresholds_t *th)
+{
+  if (b == NULL || s == NULL || th == NULL)
+    return;
+  const uint32_t limits[HEAPTOP_ALERT_COUNT] = {th->dram_free_min,
+                                                th->dram_largest_min,
+                                                th->frag_pct_max,
+                                                th->psram_free_min,
+                                                th->stack_hwm_min,
+                                                th->task_growth,
+                                                1};
+  const char *const units[HEAPTOP_ALERT_COUNT] = {"B", "B", "%", "B", "B", "B", ""};
+
+  heaptop_buf_printf(b, "%-13s %10s  %s\n", "ALERT", "LIMIT", "STATE");
+  for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
+  {
+    const uint32_t bit = 1u << i;
+    char limit[20];
+    if (bit == HEAPTOP_ALERT_ALLOC_FAIL)
+      snprintf(limit, sizeof(limit), "any");
+    else if (limits[i] == 0)
+      snprintf(limit, sizeof(limit), "off");
+    else
+      snprintf(limit, sizeof(limit), "%lu %s", (unsigned long)limits[i], units[i]);
+    if (s->alerts & bit)
+    {
+      char msg[96];
+      heaptop_render_alert(msg, sizeof(msg), bit, s, th);
+      heaptop_buf_printf(b, "%-13s %10s  ACTIVE  %s\n", s_alert_names[i], limit, msg);
+    }
+    else
+    {
+      heaptop_buf_printf(b, "%-13s %10s  ok\n", s_alert_names[i], limit);
+    }
+  }
+  heaptop_buf_printf(b,
+                     "hysteresis %lu%%: an alert clears only that far back past its limit\n",
+                     (unsigned long)th->hysteresis_pct);
+  if (s->alerts == 0)
+    heaptop_buf_printf(b, "no alerts active\n");
 }

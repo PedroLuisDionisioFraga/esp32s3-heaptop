@@ -261,6 +261,7 @@ static void _sample_task_heap(heaptop_snapshot_t *s)
 /* Push each task's heap into its history and flag steady, unreleased growth. */
 static void _update_leak_suspicion(heaptop_snapshot_t *s)
 {
+  const uint32_t growth_limit = heaptop_alerts_task_growth();
   s_tasks.sample_no++;
   for (uint16_t i = 0; i < s->task_count; i++)
   {
@@ -270,8 +271,7 @@ static void _update_leak_suspicion(heaptop_snapshot_t *s)
       continue;
     heaptop_ring_push(ring, t->heap_cur);
     const uint16_t n = heaptop_ring_copy(ring, s_tasks.history, CONFIG_HEAPTOP_HISTORY_LEN);
-    t->leak_suspect =
-      heaptop_calc_leak_suspect(s_tasks.history, n, (uint32_t)CONFIG_HEAPTOP_ALERT_TASK_GROWTH, &t->heap_growth);
+    t->leak_suspect = heaptop_calc_leak_suspect(s_tasks.history, n, growth_limit, &t->heap_growth);
   }
 }
 #endif

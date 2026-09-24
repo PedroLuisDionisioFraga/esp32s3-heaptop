@@ -138,6 +138,26 @@ void heaptop_growth_init(heaptop_growth_t *g, heaptop_growth_slot_t *slots, uint
 heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq);
 
 /**
+ * @brief Floor alert with hysteresis.
+ *
+ * Fires when @p value drops below @p floor; once active, clears only when the
+ * value is back at floor + hyst_pct%. A @p floor of 0 is off.
+ */
+bool heaptop_calc_below_floor(bool active, uint32_t value, uint32_t floor, uint32_t hyst_pct);
+
+/** @brief Ceiling alert with hysteresis: fires above @p ceiling, clears at ceiling - hyst_pct%. 0 is off. */
+bool heaptop_calc_above_ceiling(bool active, uint32_t value, uint32_t ceiling, uint32_t hyst_pct);
+
+/**
+ * @brief Alert bits for a snapshot.
+ *
+ * @param active Bits active after the previous sample (for hysteresis).
+ * @param prev_failures Failure count of the previous sample.
+ */
+uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snapshot_t *s, uint32_t active,
+                             uint32_t prev_failures);
+
+/**
  * @brief Order task indices by @p key without moving the tasks.
  *
  * Ties keep snapshot order. @p idx receives @p n indices (n <= 255).

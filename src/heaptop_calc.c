@@ -184,6 +184,72 @@ heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint
   return NULL;
 }
 
+bool heaptop_calc_below_floor(bool active, uint32_t value, uint32_t floor, uint32_t hyst_pct)
+{
+  if (floor == 0)
+    return false;
+  if (!active)
+    return value < floor;
+  const uint64_t clear_at = (uint64_t)floor + ((uint64_t)floor * hyst_pct) / 100u;
+  return value < clear_at;
+}
+
+bool heaptop_calc_above_ceiling(bool active, uint32_t value, uint32_t ceiling, uint32_t hyst_pct)
+{
+  if (ceiling == 0)
+    return false;
+  if (!active)
+    return value > ceiling;
+  const uint64_t cut = ((uint64_t)ceiling * hyst_pct) / 100u;
+  const uint64_t clear_at = ceiling > cut ? ceiling - cut : 0;
+  return value > clear_at;
+}
+
+uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snapshot_t *s, uint32_t active,
+                             uint32_t prev_failures)
+{
+  if (th == NULL || s == NULL)
+    return 0;
+  const uint32_t h = th->hysteresis_pct;
+  uint32_t out = 0;
+
+  const heaptop_region_stats_t *in = &s->region[HEAPTOP_REGION_INTERNAL];
+  if (in->present)
+  {
+    if (heaptop_calc_below_floor(active & HEAPTOP_ALERT_DRAM_FREE, in->free, th->dram_free_min, h))
+      out |= HEAPTOP_ALERT_DRAM_FREE;
+    if (heaptop_calc_below_floor(active & HEAPTOP_ALERT_DRAM_LARGEST, in->largest, th->dram_largest_min, h))
+      out |= HEAPTOP_ALERT_DRAM_LARGEST;
+    if (heaptop_calc_above_ceiling(active & HEAPTOP_ALERT_FRAG, in->frag_pct10, th->frag_pct_max * 10u, h))
+      out |= HEAPTOP_ALERT_FRAG;
+  }
+  const heaptop_region_stats_t *ps = &s->region[HEAPTOP_REGION_PSRAM];
+  if (ps->present && heaptop_calc_below_floor(active & HEAPTOP_ALERT_PSRAM_FREE, ps->free, th->psram_free_min, h))
+    out |= HEAPTOP_ALERT_PSRAM_FREE;
+
+  bool any_task = false, any_leak = false;
+  uint32_t min_hwm = UINT32_MAX;
+  const uint16_t n = s->task_count > HEAPTOP_MAX_TASKS ? HEAPTOP_MAX_TASKS : s->task_count;
+  for (uint16_t i = 0; i < n; i++)
+  {
+    const heaptop_task_stats_t *t = &s->tasks[i];
+    if (t->leak_suspect)
+      any_leak = true;
+    if (t->state == HEAPTOP_TASK_DELETED)
+      continue;
+    any_task = true;
+    if (t->stack_hwm < min_hwm)
+      min_hwm = t->stack_hwm;
+  }
+  if (any_task && heaptop_calc_below_floor(active & HEAPTOP_ALERT_STACK, min_hwm, th->stack_hwm_min, h))
+    out |= HEAPTOP_ALERT_STACK;
+  if (any_leak && th->task_growth != 0)
+    out |= HEAPTOP_ALERT_LEAK;
+  if ((s->features & HEAPTOP_FEAT_FAIL_CB) && s->alloc.failures != prev_failures)
+    out |= HEAPTOP_ALERT_ALLOC_FAIL;
+  return out;
+}
+
 uint16_t heaptop_calc_frag_pct10(uint32_t free, uint32_t largest)
 {
   if (free == 0 || largest >= free)

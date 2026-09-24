@@ -19,10 +19,11 @@
 #include "heaptop_priv.h"
 #include "heaptop_render.h"
 
-#define HEAPTOP_MIN_PERIOD_MS   100
-#define HEAPTOP_DIFF_TEXT_BYTES 4096
-#define HEAPTOP_EXIT_POLL_MS    20
-#define HEAPTOP_EXIT_POLL_TRIES 100
+#define HEAPTOP_MIN_PERIOD_MS     100
+#define HEAPTOP_DIFF_TEXT_BYTES   4096
+#define HEAPTOP_STREAM_LINE_BYTES 1536
+#define HEAPTOP_EXIT_POLL_MS      20
+#define HEAPTOP_EXIT_POLL_TRIES   100
 
 static const char *TAG = "HEAPTOP";
 
@@ -41,6 +42,10 @@ typedef struct heaptop_priv
   uint32_t seq;
   heaptop_ring_t trend[HEAPTOP_TREND_COUNT];
   uint32_t trend_mem[HEAPTOP_TREND_COUNT][HEAPTOP_TREND_LEN];
+#if CONFIG_HEAPTOP_STREAM_AT_BOOT
+  char *stream_line; /* one JSON line */
+  heaptop_emit_state_t stream_state;
+#endif
 
   /* --- Shared with readers, guarded by lock. --- */
   heaptop_snapshot_t *latest;
@@ -87,6 +92,7 @@ static void _sample_once(void)
   heaptop_heap_sample(w);
   heaptop_tasks_sample(w);
   heaptop_hooks_sample(w);
+  heaptop_alerts_sample(w);
   _push_trends(w);
 
   w->seq = ++s_priv.seq;
@@ -95,6 +101,10 @@ static void _sample_once(void)
   xSemaphoreTake(s_priv.lock, portMAX_DELAY);
   memcpy(s_priv.latest, w, sizeof(*w));
   xSemaphoreGive(s_priv.lock);
+
+#if CONFIG_HEAPTOP_STREAM_AT_BOOT
+  heaptop_emit(stdout, w, &s_priv.stream_state, s_priv.stream_line, HEAPTOP_STREAM_LINE_BYTES);
+#endif
 }
 
 static void _heaptop_task(void *arg)
@@ -122,6 +132,10 @@ static void _free_buffers(void)
   s_priv.work = NULL;
   s_priv.latest = NULL;
   s_priv.mark = NULL;
+#if CONFIG_HEAPTOP_STREAM_AT_BOOT
+  heap_caps_free(s_priv.stream_line);
+  s_priv.stream_line = NULL;
+#endif
   if (s_priv.wake)
     vSemaphoreDelete(s_priv.wake);
   if (s_priv.lock)
@@ -142,6 +156,7 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
                       TAG,
                       "sample_period_ms must be >= %d",
                       HEAPTOP_MIN_PERIOD_MS);
+  ESP_RETURN_ON_ERROR(heaptop_alerts_init(&cfg.thresholds), TAG, "invalid thresholds");
   s_priv.cfg = cfg;
   s_priv.seq = 0;
   s_priv.last_sample_us = 0;
@@ -155,7 +170,13 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
   s_priv.work = heap_caps_calloc(1, sizeof(heaptop_snapshot_t), caps);
   s_priv.latest = heap_caps_calloc(1, sizeof(heaptop_snapshot_t), caps);
   s_priv.mark = heap_caps_calloc(1, sizeof(heaptop_snapshot_t), caps);
-  if (!s_priv.lock || !s_priv.wake || !s_priv.work || !s_priv.latest || !s_priv.mark)
+  bool ok = s_priv.lock && s_priv.wake && s_priv.work && s_priv.latest && s_priv.mark;
+#if CONFIG_HEAPTOP_STREAM_AT_BOOT
+  memset(&s_priv.stream_state, 0, sizeof(s_priv.stream_state));
+  s_priv.stream_line = heap_caps_malloc(HEAPTOP_STREAM_LINE_BYTES, caps);
+  ok = ok && s_priv.stream_line;
+#endif
+  if (!ok)
   {
     ESP_LOGE(TAG, "no memory for snapshot buffers");
     goto fail;

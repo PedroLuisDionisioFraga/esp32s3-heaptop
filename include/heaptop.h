@@ -20,6 +20,7 @@
 #ifndef HEAPTOP_H
 #define HEAPTOP_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -34,11 +35,24 @@ extern "C"
 
 typedef struct heaptop_config
 {
-  uint32_t sample_period_ms; /**< Time between samples (>= 100 ms) */
-  uint32_t task_stack;       /**< Sampler task stack, bytes */
-  uint8_t task_prio;         /**< Sampler task priority; keep it low */
-  int8_t task_core;          /**< Core to pin the sampler to; -1 = no affinity */
+  uint32_t sample_period_ms;       /**< Time between samples (>= 100 ms) */
+  uint32_t task_stack;             /**< Sampler task stack, bytes */
+  uint8_t task_prio;               /**< Sampler task priority; keep it low */
+  int8_t task_core;                /**< Core to pin the sampler to; -1 = no affinity */
+  heaptop_thresholds_t thresholds; /**< Alert limits; changeable later with heaptop_set_thresholds() */
 } heaptop_config_t;
+
+/** Alert limits taken from menuconfig (Component config > Heaptop > Alert thresholds). */
+#define HEAPTOP_THRESHOLDS_DEFAULT()                           \
+  {                                                            \
+    .dram_free_min = CONFIG_HEAPTOP_ALERT_DRAM_FREE_MIN,       \
+    .dram_largest_min = CONFIG_HEAPTOP_ALERT_DRAM_LARGEST_MIN, \
+    .frag_pct_max = CONFIG_HEAPTOP_ALERT_FRAG_PCT_MAX,         \
+    .psram_free_min = CONFIG_HEAPTOP_ALERT_PSRAM_FREE_MIN,     \
+    .stack_hwm_min = CONFIG_HEAPTOP_ALERT_STACK_HWM_MIN,       \
+    .task_growth = CONFIG_HEAPTOP_ALERT_TASK_GROWTH,           \
+    .hysteresis_pct = CONFIG_HEAPTOP_ALERT_HYSTERESIS_PCT,     \
+  }
 
 /** Configuration taken from menuconfig (Component config > Heaptop). */
 #define HEAPTOP_CONFIG_DEFAULT()                         \
@@ -47,7 +61,18 @@ typedef struct heaptop_config
     .task_stack = CONFIG_HEAPTOP_TASK_STACK,             \
     .task_prio = CONFIG_HEAPTOP_TASK_PRIO,               \
     .task_core = CONFIG_HEAPTOP_TASK_CORE,               \
+    .thresholds = HEAPTOP_THRESHOLDS_DEFAULT(),          \
   }
+
+/**
+ * @brief Called when an alert turns on or off.
+ *
+ * Runs in the sampler task: keep it short and do not block.
+ *
+ * @param alert One HEAPTOP_ALERT_* bit.
+ * @param s The sample that changed the alert.
+ */
+typedef void (*heaptop_alert_cb_t)(uint32_t alert, bool active, const heaptop_snapshot_t *s, void *ctx);
 
 /**
  * @brief Start the sampler task.
@@ -101,6 +126,23 @@ esp_err_t heaptop_leaks_stop(void);
  * @param max_groups Rows to print.
  */
 esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups);
+
+/**
+ * @brief Register the alert callback; NULL removes it.
+ *
+ * Alerts are also logged with ESP_LOGW when they turn on.
+ */
+esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx);
+
+/** @brief Current alert limits. */
+esp_err_t heaptop_get_thresholds(heaptop_thresholds_t *out);
+
+/**
+ * @brief Replace the alert limits; takes effect on the next sample.
+ *
+ * @return ESP_OK; ESP_ERR_INVALID_ARG for NULL, frag_pct_max > 100 or hysteresis_pct > 50.
+ */
+esp_err_t heaptop_set_thresholds(const heaptop_thresholds_t *th);
 
 /** @brief Remember the latest snapshot as the baseline for heaptop_diff(). */
 esp_err_t heaptop_mark(void);

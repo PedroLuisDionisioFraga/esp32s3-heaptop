@@ -493,9 +493,84 @@ static void test_diff_without_mark(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "ht mark"));
 }
 
+static const heaptop_thresholds_t s_th = {.dram_free_min = 20480,
+                                          .dram_largest_min = 8192,
+                                          .frag_pct_max = 80,
+                                          .psram_free_min = 65536,
+                                          .stack_hwm_min = 512,
+                                          .task_growth = 4096,
+                                          .hysteresis_pct = 10};
+
+static void test_alert_names(void)
+{
+  TEST_ASSERT_EQUAL_STRING("dram_free", heaptop_alert_name(HEAPTOP_ALERT_DRAM_FREE));
+  TEST_ASSERT_EQUAL_STRING("leak", heaptop_alert_name(HEAPTOP_ALERT_LEAK));
+  TEST_ASSERT_EQUAL_STRING("alloc_fail", heaptop_alert_name(HEAPTOP_ALERT_ALLOC_FAIL));
+  TEST_ASSERT_EQUAL_STRING("unknown", heaptop_alert_name(1u << 20));
+}
+
+static void test_alert_messages_carry_values(void)
+{
+  char msg[128];
+  s_snap.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 18432, .frag_pct10 = 853};
+  _add_task("blink", 0, 312, 0, HEAPTOP_TASK_BLOCKED);
+  _add_task("stress", 0, 4000, 20480, HEAPTOP_TASK_BLOCKED);
+  s_snap.tasks[1].leak_suspect = true;
+  s_snap.tasks[1].heap_growth = 12288;
+
+  heaptop_render_alert(msg, sizeof(msg), HEAPTOP_ALERT_DRAM_FREE, &s_snap, &s_th);
+  TEST_ASSERT_NOT_NULL(strstr(msg, "18.0K"));
+  TEST_ASSERT_NOT_NULL(strstr(msg, "20.0K"));
+  heaptop_render_alert(msg, sizeof(msg), HEAPTOP_ALERT_FRAG, &s_snap, &s_th);
+  TEST_ASSERT_NOT_NULL(strstr(msg, "85.3%"));
+  heaptop_render_alert(msg, sizeof(msg), HEAPTOP_ALERT_STACK, &s_snap, &s_th);
+  TEST_ASSERT_NOT_NULL(strstr(msg, "blink"));
+  TEST_ASSERT_NOT_NULL(strstr(msg, "312"));
+  heaptop_render_alert(msg, sizeof(msg), HEAPTOP_ALERT_LEAK, &s_snap, &s_th);
+  TEST_ASSERT_NOT_NULL(strstr(msg, "stress"));
+  TEST_ASSERT_NOT_NULL(strstr(msg, "+12.0K"));
+}
+
+static void test_alerts_view_lists_thresholds_and_active(void)
+{
+  s_snap.alerts = HEAPTOP_ALERT_DRAM_FREE;
+  s_snap.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 18432};
+  heaptop_render_alerts(&s_buf, &s_snap, &s_th);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "dram_free"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "20480"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "hysteresis"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "ACTIVE"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "18.0K"));
+}
+
+static void test_alerts_view_none_active(void)
+{
+  heaptop_render_alerts(&s_buf, &s_snap, &s_th);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "no alerts active"));
+}
+
+static void test_top_banner_lists_active_alerts(void)
+{
+  const heaptop_top_view_t view = {.sort = HEAPTOP_SORT_CPU};
+  _fill_top();
+  s_snap.alerts = HEAPTOP_ALERT_LEAK | HEAPTOP_ALERT_STACK;
+  heaptop_render_top(&s_buf, &s_snap, &view);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "ALERTS: stack leak"));
+
+  heaptop_buf_init(&s_buf, s_mem, sizeof(s_mem));
+  s_snap.alerts = 0;
+  heaptop_render_top(&s_buf, &s_snap, &view);
+  TEST_ASSERT_NULL(strstr(s_mem, "ALERTS"));
+}
+
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_alert_names);
+  RUN_TEST(test_alert_messages_carry_values);
+  RUN_TEST(test_alerts_view_lists_thresholds_and_active);
+  RUN_TEST(test_alerts_view_none_active);
+  RUN_TEST(test_top_banner_lists_active_alerts);
   RUN_TEST(test_top_shows_alloc_rates_when_hooks_on);
   RUN_TEST(test_leaks_off_names_the_option);
   RUN_TEST(test_leaks_header_and_rows);

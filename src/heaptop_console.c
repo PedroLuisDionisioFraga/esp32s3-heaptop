@@ -25,6 +25,7 @@
 #define HEAPTOP_REFRESH_MIN_MS 100
 #define HEAPTOP_REFRESH_MAX_MS 10000
 #define HEAPTOP_KEY_CTRL_C     0x03
+#define HEAPTOP_STREAM_POLL_MS 200
 
 /* ANSI: alternate screen + hidden cursor while `ht top` owns the terminal. */
 #define HEAPTOP_ANSI_ENTER "\x1b[?1049h\x1b[?25l"
@@ -60,6 +61,7 @@ typedef struct heaptop_console_priv
   /* --- Console-task scratch. --- */
   heaptop_frag_hist_t hist;
   heaptop_fail_t fails[HEAPTOP_CON_FAILS];
+  heaptop_emit_state_t emit;
 } heaptop_console_priv_t;
 
 static heaptop_console_priv_t s_con;
@@ -307,8 +309,10 @@ static int _cmd_top(int argc, char **argv)
   if (!_load_snapshot())
     return 1;
 
-  /* ESP_LOG lines from other tasks still land on screen; the next frame overwrites them. */
+  /* Alerts show in the banner instead of the log. ESP_LOG lines from other tasks
+   * still land on screen; the next frame overwrites them. */
   const bool ansi = !linenoiseIsDumbMode();
+  heaptop_alerts_set_quiet(true);
   if (ansi)
     fputs(HEAPTOP_ANSI_ENTER, stdout);
 
@@ -366,6 +370,114 @@ static int _cmd_top(int argc, char **argv)
   if (ansi)
     fputs(HEAPTOP_ANSI_LEAVE, stdout);
   fflush(stdout);
+  heaptop_alerts_set_quiet(false);
+  return 0;
+}
+
+static bool _is_quit(int key)
+{
+  return key == 'q' || key == 'Q' || key == HEAPTOP_KEY_CTRL_C;
+}
+
+static int _cmd_stream(int argc, char **argv)
+{
+  uint32_t every_ms = 0; /* 0 = every sample */
+  if (argc > 1)
+  {
+    char *end = NULL;
+    unsigned long ms = strtoul(argv[1], &end, 10);
+    if (end == argv[1] || *end != '\0' || ms < HEAPTOP_REFRESH_MIN_MS)
+    {
+      printf("ht stream: interval must be >= %d ms\n", HEAPTOP_REFRESH_MIN_MS);
+      return 1;
+    }
+    every_ms = (uint32_t)ms;
+  }
+  if (!_load_snapshot())
+    return 1;
+
+  /* Alerts arrive as JSON lines instead of log lines while streaming. */
+  heaptop_alerts_set_quiet(true);
+  memset(&s_con.emit, 0, sizeof(s_con.emit));
+  uint32_t last_seq = 0;
+  uint64_t last_emit_us = 0;
+  for (;;)
+  {
+    if (heaptop_get_snapshot(s_con.snap) == ESP_OK && s_con.snap->seq != last_seq &&
+        (last_emit_us == 0 || s_con.snap->uptime_us - last_emit_us >= (uint64_t)every_ms * 1000u))
+    {
+      heaptop_emit(stdout, s_con.snap, &s_con.emit, s_con.out, HEAPTOP_OUT_SIZE);
+      last_seq = s_con.snap->seq;
+      last_emit_us = s_con.snap->uptime_us;
+    }
+    if (_is_quit(_wait_key(HEAPTOP_STREAM_POLL_MS)))
+      break;
+  }
+  heaptop_alerts_set_quiet(false);
+  return 0;
+}
+
+static const char *const s_th_keys[] = {
+  "dram_free", "dram_largest", "frag", "psram_free", "stack", "growth", "hysteresis"};
+
+static uint32_t *_th_field(heaptop_thresholds_t *th, size_t i)
+{
+  uint32_t *const fields[] = {&th->dram_free_min,
+                              &th->dram_largest_min,
+                              &th->frag_pct_max,
+                              &th->psram_free_min,
+                              &th->stack_hwm_min,
+                              &th->task_growth,
+                              &th->hysteresis_pct};
+  return fields[i];
+}
+
+static int _cmd_alerts(int argc, char **argv)
+{
+  heaptop_thresholds_t th;
+  heaptop_get_thresholds(&th);
+  const char *action = argc > 1 ? argv[1] : "show";
+  if (strcmp(action, "set") == 0)
+  {
+    if (argc != 4)
+    {
+      printf("usage: ht alerts set <dram_free|dram_largest|frag|psram_free|stack|growth|hysteresis> <value>\n");
+      return 1;
+    }
+    size_t key = sizeof(s_th_keys) / sizeof(s_th_keys[0]);
+    for (size_t i = 0; i < sizeof(s_th_keys) / sizeof(s_th_keys[0]); i++)
+    {
+      if (strcmp(argv[2], s_th_keys[i]) == 0)
+        key = i;
+    }
+    char *end = NULL;
+    const unsigned long v = strtoul(argv[3], &end, 10);
+    if (key == sizeof(s_th_keys) / sizeof(s_th_keys[0]) || end == argv[3] || *end != '\0')
+    {
+      printf("ht alerts set: unknown key '%s' or bad value '%s'\n", argv[2], argv[3]);
+      return 1;
+    }
+    *_th_field(&th, key) = (uint32_t)v;
+    esp_err_t err = heaptop_set_thresholds(&th);
+    if (err != ESP_OK)
+    {
+      printf("ht alerts set: %s (frag is 0..100, hysteresis 0..50; 0 turns an alert off)\n", esp_err_to_name(err));
+      return 1;
+    }
+    printf("%s = %lu, from the next sample\n", s_th_keys[key], v);
+    return 0;
+  }
+  if (strcmp(action, "show") != 0)
+  {
+    printf("ht alerts: unknown action '%s' (use show or set)\n", action);
+    return 1;
+  }
+  if (!_load_snapshot())
+    return 1;
+  heaptop_buf_t b;
+  heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
+  heaptop_render_alerts(&b, s_con.snap, &th);
+  _flush(&b);
   return 0;
 }
 
@@ -376,6 +488,8 @@ static const heaptop_sub_t s_subs[] = {
   {"leaks", "start|stop|report [rows]|status", "Capture allocations never freed, grouped by call stack", _cmd_leaks},
   {"mark", "", "Remember the current state as a baseline", _cmd_mark},
   {"diff", "", "What changed since `ht mark`: region free bytes and task heap", _cmd_diff},
+  {"alerts", "[show|set <key> <value>]", "Alert limits and active alerts; 0 turns a limit off", _cmd_alerts},
+  {"stream", "[every_ms]", "JSON Lines for host tools, one sample per line group; q stops", _cmd_stream},
   {"heap", "", "Heap regions: free, min free, largest block, fragmentation", _cmd_heap},
   {"tasks", "[cpu|heap|stack|name]", "Tasks: state, CPU %, stack high-water mark, heap held", _cmd_tasks},
 };

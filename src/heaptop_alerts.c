@@ -1,0 +1,145 @@
+/**
+ * @file heaptop_alerts.c
+ * @brief Threshold alerts: evaluated by the sampler, fired once per transition.
+ *
+ * Thresholds and the callback are written by any task and read by the sampler,
+ * both under a spinlock (a few words). Alert state is sampler-owned.
+ */
+
+#include "esp_check.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "heaptop.h"
+#include "heaptop_calc.h"
+#include "heaptop_priv.h"
+#include "heaptop_render.h"
+
+#define HEAPTOP_ALERT_MSG_LEN 112
+
+static const char *TAG = "HEAPTOP";
+
+typedef struct heaptop_alerts_priv
+{
+  /* --- Written by any task, read by the sampler; guarded by mux. --- */
+  portMUX_TYPE mux;
+  heaptop_thresholds_t th;
+  heaptop_alert_cb_t cb;
+  void *cb_ctx;
+
+  /* --- Sampler-owned. --- */
+  uint32_t active;
+  uint32_t prev_failures;
+  bool have_prev;
+
+  /* --- Cross-task flag: set by `ht top` / `ht stream` while they own the terminal. --- */
+  volatile bool quiet;
+} heaptop_alerts_priv_t;
+
+static heaptop_alerts_priv_t s_alerts = {.mux = portMUX_INITIALIZER_UNLOCKED};
+
+static esp_err_t _validate(const heaptop_thresholds_t *th)
+{
+  ESP_RETURN_ON_FALSE(th != NULL, ESP_ERR_INVALID_ARG, TAG, "thresholds is NULL");
+  ESP_RETURN_ON_FALSE(th->frag_pct_max <= 100, ESP_ERR_INVALID_ARG, TAG, "frag_pct_max must be 0..100");
+  ESP_RETURN_ON_FALSE(th->hysteresis_pct <= 50, ESP_ERR_INVALID_ARG, TAG, "hysteresis_pct must be 0..50");
+  return ESP_OK;
+}
+
+esp_err_t heaptop_alerts_init(const heaptop_thresholds_t *th)
+{
+  ESP_RETURN_ON_ERROR(_validate(th), TAG, "invalid thresholds");
+  taskENTER_CRITICAL(&s_alerts.mux);
+  s_alerts.th = *th;
+  taskEXIT_CRITICAL(&s_alerts.mux);
+  s_alerts.active = 0;
+  s_alerts.have_prev = false;
+  return ESP_OK;
+}
+
+esp_err_t heaptop_get_thresholds(heaptop_thresholds_t *out)
+{
+  ESP_RETURN_ON_FALSE(out != NULL, ESP_ERR_INVALID_ARG, TAG, "out is NULL");
+  taskENTER_CRITICAL(&s_alerts.mux);
+  *out = s_alerts.th;
+  taskEXIT_CRITICAL(&s_alerts.mux);
+  return ESP_OK;
+}
+
+esp_err_t heaptop_set_thresholds(const heaptop_thresholds_t *th)
+{
+  ESP_RETURN_ON_ERROR(_validate(th), TAG, "invalid thresholds");
+  taskENTER_CRITICAL(&s_alerts.mux);
+  s_alerts.th = *th;
+  taskEXIT_CRITICAL(&s_alerts.mux);
+  return ESP_OK;
+}
+
+esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx)
+{
+  taskENTER_CRITICAL(&s_alerts.mux);
+  s_alerts.cb = cb;
+  s_alerts.cb_ctx = ctx;
+  taskEXIT_CRITICAL(&s_alerts.mux);
+  return ESP_OK;
+}
+
+uint32_t heaptop_alerts_task_growth(void)
+{
+  taskENTER_CRITICAL(&s_alerts.mux);
+  const uint32_t growth = s_alerts.th.task_growth;
+  taskEXIT_CRITICAL(&s_alerts.mux);
+  return growth;
+}
+
+void heaptop_alerts_set_quiet(bool quiet)
+{
+  s_alerts.quiet = quiet;
+}
+
+void heaptop_alerts_sample(heaptop_snapshot_t *s)
+{
+  heaptop_thresholds_t th;
+  heaptop_alert_cb_t cb;
+  void *ctx;
+  taskENTER_CRITICAL(&s_alerts.mux);
+  th = s_alerts.th;
+  cb = s_alerts.cb;
+  ctx = s_alerts.cb_ctx;
+  taskEXIT_CRITICAL(&s_alerts.mux);
+
+  /* Failures before the first sample are history, not news. */
+  if (!s_alerts.have_prev)
+  {
+    s_alerts.prev_failures = s->alloc.failures;
+    s_alerts.have_prev = true;
+  }
+  const uint32_t now = heaptop_calc_alerts(&th, s, s_alerts.active, s_alerts.prev_failures);
+  const uint32_t rising = now & ~s_alerts.active;
+  const uint32_t falling = s_alerts.active & ~now;
+  s->alerts = now;
+  s_alerts.active = now;
+  s_alerts.prev_failures = s->alloc.failures;
+
+  for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
+  {
+    const uint32_t bit = 1u << i;
+    if (!((rising | falling) & bit))
+      continue;
+    const bool on = (rising & bit) != 0;
+    if (!s_alerts.quiet)
+    {
+      if (on)
+      {
+        char msg[HEAPTOP_ALERT_MSG_LEN];
+        heaptop_render_alert(msg, sizeof(msg), bit, s, &th);
+        ESP_LOGW(TAG, "ALERT %s: %s", heaptop_alert_name(bit), msg);
+      }
+      else if (bit != HEAPTOP_ALERT_ALLOC_FAIL) /* an event, not a level: clearing is noise */
+      {
+        ESP_LOGI(TAG, "alert %s cleared", heaptop_alert_name(bit));
+      }
+    }
+    if (cb)
+      cb(bit, on, s, ctx);
+  }
+}

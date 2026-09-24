@@ -73,6 +73,16 @@ void heaptop_render_leaks(heaptop_buf_t *b, const heaptop_leak_info_t *info, con
 /** @brief What changed between two snapshots: regions and per-task heap. */
 void heaptop_render_diff(heaptop_buf_t *b, const heaptop_snapshot_t *before, const heaptop_snapshot_t *now);
 
+/** @brief Short machine name of one alert bit ("dram_free", "leak", ...), or "unknown". */
+const char *heaptop_alert_name(uint32_t alert);
+
+/** @brief One-line human explanation of an active alert, with the values that tripped it. */
+void heaptop_render_alert(char *out, size_t len, uint32_t alert, const heaptop_snapshot_t *s,
+                          const heaptop_thresholds_t *th);
+
+/** @brief `ht alerts`: thresholds and the alerts active in @p s. */
+void heaptop_render_alerts(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_thresholds_t *th);
+
 /** @brief Region table: total, free, min free, largest block, fragmentation, blocks. */
 void heaptop_render_heap(heaptop_buf_t *b, const heaptop_snapshot_t *s);
 
