@@ -22,8 +22,9 @@
 #define HEAPTOP_STATUS_CAP (HEAPTOP_MAX_TASKS * 2)
 /* Task tracking keeps deleted tasks too (CONFIG_HEAP_TRACK_DELETED_TASKS). */
 #define HEAPTOP_TSTAT_CAP (HEAPTOP_MAX_TASKS * 2)
-/* Heaps a task can touch on one chip: DRAM, IRAM, SPIRAM, RTCRAM and spares. */
-#define HEAPTOP_HEAPS_PER_TASK 6
+/* Average heaps per task in the per-heap table. A task needing more than its
+ * share only loses its PSRAM split (heap_stat NULL), never its totals. */
+#define HEAPTOP_HEAPS_PER_TASK 4
 
 #define HEAPTOP_HAS_RUNTIME_STATS (configGENERATE_RUN_TIME_STATS == 1)
 
