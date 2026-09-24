@@ -103,6 +103,7 @@ void app_main(void)
 #if SOC_DEEP_SLEEP_SUPPORTED
   register_system_deep_sleep();
 #endif
+  ESP_ERROR_CHECK(heaptop_console_register());
 
   printf("\n"
          "Heaptop basic example.\n"
