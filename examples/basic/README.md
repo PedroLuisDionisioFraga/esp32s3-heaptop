@@ -20,6 +20,8 @@ Type `help` for every command, `ht` for heaptop's.
 
 ## Try it
 
+The [guided examples](../../README.md#guided-examples) in the main README walk through these step by step, with real screenshots and how to read them. In short:
+
 | Do | Then look at |
 |---|---|
 | `stress leak 256 100` | `ht top` (the `stress_leak` heap climbs, then `LEAK?` and the `leak` alert appear); `ht leaks start` … `ht leaks stop` groups the allocations by call stack |
@@ -31,7 +33,7 @@ Type `help` for every command, `ht` for heaptop's.
 | `ht mark`, then any of the above, then `ht diff` | what changed, region by region and task by task |
 | `ht stream` | JSON Lines; `q` stops |
 
-`stress stop` ends every workload and frees what it kept.
+`stress stop` ends every workload and frees what it kept. The workers never delete themselves: they suspend, and `stress stop` deletes them. With heap task tracking on, a task that deletes itself can abort the chip (see [Caveats](../../README.md#caveats)).
 
 ## Configuration
 
@@ -45,4 +47,8 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.minimal" build
 
 ## Tests
 
-With the board attached: `pytest pytest_heaptop_basic.py --target esp32s3 --port PORT` (pytest-embedded).
+With the board attached, after `idf.py build` (pytest-embedded flashes the build):
+
+```bash
+pytest pytest_heaptop_basic.py --embedded-services esp,idf --target esp32s3 --port PORT --build-dir build
+```

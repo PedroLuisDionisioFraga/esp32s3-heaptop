@@ -17,3 +17,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Threshold alerts with hysteresis, logging and a callback; limits changeable at runtime.
 - JSON Lines stream, from the console or from boot (`CONFIG_HEAPTOP_STREAM_AT_BOOT`).
 - `basic` example with `stress` workloads.
+- README guided examples (heap health, fragmentation, leaks, CPU, stack, failed allocations, streaming) with real screenshots from an ESP32-S3.
