@@ -1,6 +1,6 @@
 dependencies:
   pedroluisdionisiofraga/heaptop:
-    version: "^0.1.0"
+    version: "^0.2.0"
     # Build against the local component (repo root) instead of the published
     # version — this is what lets CI test the code in the PR, not the Registry.
     override_path: "../../../"
