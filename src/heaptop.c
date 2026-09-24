@@ -52,8 +52,8 @@ typedef struct heaptop_priv
   heaptop_snapshot_t *mark; /* baseline for heaptop_diff(); seq 0 = none */
 
   /* --- Cross-task words: written whole by one task, read by another. --- */
-  volatile bool running;      /* cleared by deinit */
-  TaskHandle_t volatile task; /* cleared by the sampler as its last action */
+  volatile bool running; /* cleared by deinit */
+  TaskHandle_t task;     /* set by init, deleted and cleared by deinit */
 } heaptop_priv_t;
 
 static heaptop_priv_t s_priv; /* zero-init; program lifetime */
@@ -118,9 +118,11 @@ static void _heaptop_task(void *arg)
     xSemaphoreTake(s_priv.wake, period);
   }
 
-  /* Last touch of shared state: deinit frees everything once it sees NULL. */
-  s_priv.task = NULL;
-  vTaskDelete(NULL);
+  /* Deinit deletes this task once it is suspended. Deleting itself would leave
+   * the free of its stack to the idle task, and with heap task tracking that
+   * free waits on a mutex: if another task holds it, the idle task blocks and
+   * FreeRTOS asserts (prvSelectHighestPriorityTaskSMP). */
+  vTaskSuspend(NULL);
 }
 
 static void _free_buffers(void)
@@ -226,13 +228,20 @@ esp_err_t heaptop_deinit(void)
 
   s_priv.running = false;
   xSemaphoreGive(s_priv.wake);
-  for (int i = 0; i < HEAPTOP_EXIT_POLL_TRIES && s_priv.task != NULL; i++)
-    vTaskDelay(pdMS_TO_TICKS(HEAPTOP_EXIT_POLL_MS));
-  if (s_priv.task != NULL)
+  bool parked = false;
+  for (int i = 0; i < HEAPTOP_EXIT_POLL_TRIES && !parked; i++)
+  {
+    parked = eTaskGetState(s_priv.task) == eSuspended;
+    if (!parked)
+      vTaskDelay(pdMS_TO_TICKS(HEAPTOP_EXIT_POLL_MS));
+  }
+  if (!parked)
   {
     ESP_LOGE(TAG, "sampler did not exit; buffers kept");
     return ESP_ERR_TIMEOUT;
   }
+  vTaskDelete(s_priv.task); /* suspended, so freed here rather than by the idle task */
+  s_priv.task = NULL;
 
   heaptop_leaks_shutdown();
   _free_buffers();

@@ -34,10 +34,10 @@
 
 typedef struct stress_priv
 {
-  /* --- Worker handles: set by the console task, cleared by each worker as it exits. --- */
-  TaskHandle_t volatile leak_task;
-  TaskHandle_t volatile cpu_task;
-  TaskHandle_t volatile stack_task;
+  /* --- Worker handles: set by `stress <x>`, cleared by `stress stop`; console task only. --- */
+  TaskHandle_t leak_task;
+  TaskHandle_t cpu_task;
+  TaskHandle_t stack_task;
 
   /* --- Worker parameters: written before the worker starts. --- */
   uint32_t leak_bytes;
@@ -57,11 +57,8 @@ typedef struct stress_priv
 
 static stress_priv_t s_stress;
 
-static void _park_until_stop(void)
-{
-  while (!s_stress.stop) vTaskDelay(pdMS_TO_TICKS(100));
-}
-
+/* Workers never delete themselves: they suspend, and `stress stop` deletes them
+ * (see _reap). */
 static void _leak_task(void *arg)
 {
   (void)arg;
@@ -76,9 +73,7 @@ static void _leak_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(s_stress.leak_ms));
   }
   /* Stay alive so the leaked heap belongs to a live task until `stress stop`. */
-  _park_until_stop();
-  s_stress.leak_task = NULL;
-  vTaskDelete(NULL);
+  vTaskSuspend(NULL);
 }
 
 static void _cpu_task(void *arg)
@@ -92,8 +87,7 @@ static void _cpu_task(void *arg)
     }
     vTaskDelay(pdMS_TO_TICKS(STRESS_CPU_WINDOW_MS * (100 - s_stress.cpu_pct) / 100));
   }
-  s_stress.cpu_task = NULL;
-  vTaskDelete(NULL);
+  vTaskSuspend(NULL);
 }
 
 /* Touches exactly @p bytes of stack in one frame, so the high-water mark drops
@@ -109,9 +103,7 @@ static void _stack_task(void *arg)
 {
   (void)arg;
   (void)_burn_stack(s_stress.stack_bytes);
-  _park_until_stop();
-  s_stress.stack_task = NULL;
-  vTaskDelete(NULL);
+  vTaskSuspend(NULL);
 }
 
 static bool _parse_u32(const char *s, uint32_t *out)
@@ -124,7 +116,7 @@ static bool _parse_u32(const char *s, uint32_t *out)
   return true;
 }
 
-static bool _start(TaskFunction_t fn, const char *name, TaskHandle_t volatile *handle)
+static bool _start(TaskFunction_t fn, const char *name, TaskHandle_t *handle)
 {
   if (*handle != NULL)
   {
@@ -141,12 +133,31 @@ static bool _start(TaskFunction_t fn, const char *name, TaskHandle_t volatile *h
   return true;
 }
 
+/* Deletes a worker once it has suspended itself. A task that deletes itself is
+ * freed later by the idle task, and with heap task tracking that free waits on
+ * a mutex: while another task holds it (the frees in _stop, say), the idle task
+ * blocks, its core has nothing left to run, and FreeRTOS asserts in
+ * prvSelectHighestPriorityTaskSMP. A suspended task is freed right here instead. */
+static bool _reap(TaskHandle_t *handle)
+{
+  if (*handle == NULL)
+    return true;
+  if (eTaskGetState(*handle) != eSuspended)
+    return false;
+  vTaskDelete(*handle);
+  *handle = NULL;
+  return true;
+}
+
 static int _stop(void)
 {
   s_stress.stop = true;
   for (int i = 0; i < STRESS_EXIT_TRIES; i++)
   {
-    if (!s_stress.leak_task && !s_stress.cpu_task && !s_stress.stack_task)
+    const bool leak = _reap(&s_stress.leak_task);
+    const bool cpu = _reap(&s_stress.cpu_task);
+    const bool stack = _reap(&s_stress.stack_task);
+    if (leak && cpu && stack)
       break;
     vTaskDelay(pdMS_TO_TICKS(STRESS_EXIT_POLL_MS));
   }
