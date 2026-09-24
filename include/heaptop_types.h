@@ -106,18 +106,32 @@ typedef struct heaptop_alloc_stats
   uint32_t failures;    /**< failed allocations since boot */
 } heaptop_alloc_stats_t;
 
+/** Samples of history carried in each snapshot for sparklines. */
+#define HEAPTOP_TREND_LEN 40
+
+typedef enum heaptop_trend
+{
+  HEAPTOP_TREND_INTERNAL_FREE = 0,
+  HEAPTOP_TREND_INTERNAL_LARGEST,
+  HEAPTOP_TREND_PSRAM_FREE,
+  HEAPTOP_TREND_COUNT,
+} heaptop_trend_t;
+
 typedef struct heaptop_snapshot
 {
   uint32_t seq; /**< increments every sample; 0 = no sample yet */
   uint64_t uptime_us;
-  uint32_t dt_ms;    /**< real time since the previous sample */
-  uint32_t self_us;  /**< time heaptop spent taking this sample */
-  uint32_t features; /**< HEAPTOP_FEAT_* */
-  uint32_t alerts;   /**< active alert bits */
+  uint32_t period_ms; /**< configured sampling period */
+  uint32_t dt_ms;     /**< real time since the previous sample */
+  uint32_t self_us;   /**< time heaptop spent taking this sample */
+  uint32_t features;  /**< HEAPTOP_FEAT_* */
+  uint32_t alerts;    /**< active alert bits */
   uint8_t num_cores;
   uint16_t core_load_pct10[HEAPTOP_MAX_CORES];
   heaptop_region_stats_t region[HEAPTOP_REGION_COUNT];
   heaptop_alloc_stats_t alloc;
+  uint16_t trend_len;                                     /**< valid entries per trend series */
+  uint32_t trend[HEAPTOP_TREND_COUNT][HEAPTOP_TREND_LEN]; /**< oldest first */
   uint16_t task_count;
   bool tasks_truncated; /**< more tasks existed than HEAPTOP_MAX_TASKS */
   heaptop_task_stats_t tasks[HEAPTOP_MAX_TASKS];

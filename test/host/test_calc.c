@@ -146,6 +146,54 @@ static void test_sort_by_name_ignores_case(void)
   TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, idx, 4);
 }
 
+static void test_ring_copies_oldest_first_before_wrap(void)
+{
+  uint32_t mem[4];
+  uint32_t out[4] = {0};
+  heaptop_ring_t r;
+  heaptop_ring_init(&r, mem, 4);
+  heaptop_ring_push(&r, 1);
+  heaptop_ring_push(&r, 2);
+  heaptop_ring_push(&r, 3);
+  TEST_ASSERT_EQUAL_UINT16(3, heaptop_ring_copy(&r, out, 4));
+  const uint32_t expected[] = {1, 2, 3};
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(expected, out, 3);
+}
+
+static void test_ring_keeps_newest_after_wrap(void)
+{
+  uint32_t mem[3];
+  uint32_t out[3] = {0};
+  heaptop_ring_t r;
+  heaptop_ring_init(&r, mem, 3);
+  for (uint32_t v = 1; v <= 5; v++) heaptop_ring_push(&r, v);
+  TEST_ASSERT_EQUAL_UINT16(3, heaptop_ring_copy(&r, out, 3));
+  const uint32_t expected[] = {3, 4, 5};
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(expected, out, 3);
+}
+
+static void test_ring_copy_limits_to_newest_values(void)
+{
+  uint32_t mem[5];
+  uint32_t out[2] = {0};
+  heaptop_ring_t r;
+  heaptop_ring_init(&r, mem, 5);
+  for (uint32_t v = 1; v <= 4; v++) heaptop_ring_push(&r, v);
+  TEST_ASSERT_EQUAL_UINT16(2, heaptop_ring_copy(&r, out, 2));
+  const uint32_t expected[] = {3, 4};
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(expected, out, 2);
+}
+
+static void test_ring_empty_copies_nothing(void)
+{
+  uint32_t mem[2];
+  uint32_t out[2] = {7, 7};
+  heaptop_ring_t r;
+  heaptop_ring_init(&r, mem, 2);
+  TEST_ASSERT_EQUAL_UINT16(0, heaptop_ring_copy(&r, out, 2));
+  TEST_ASSERT_EQUAL_UINT32(7, out[0]);
+}
+
 int main(void)
 {
   UNITY_BEGIN();
@@ -166,5 +214,9 @@ int main(void)
   RUN_TEST(test_sort_by_stack_ascending);
   RUN_TEST(test_sort_by_heap_descending);
   RUN_TEST(test_sort_by_name_ignores_case);
+  RUN_TEST(test_ring_copies_oldest_first_before_wrap);
+  RUN_TEST(test_ring_keeps_newest_after_wrap);
+  RUN_TEST(test_ring_copy_limits_to_newest_values);
+  RUN_TEST(test_ring_empty_copies_nothing);
   return UNITY_END();
 }

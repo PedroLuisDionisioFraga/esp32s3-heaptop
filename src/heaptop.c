@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "heaptop_calc.h"
 #include "heaptop_priv.h"
 
 #define HEAPTOP_MIN_PERIOD_MS   100
@@ -36,6 +37,8 @@ typedef struct heaptop_priv
   heaptop_snapshot_t *work;
   uint64_t last_sample_us;
   uint32_t seq;
+  heaptop_ring_t trend[HEAPTOP_TREND_COUNT];
+  uint32_t trend_mem[HEAPTOP_TREND_COUNT][HEAPTOP_TREND_LEN];
 
   /* --- Shared with readers, guarded by lock. --- */
   heaptop_snapshot_t *latest;
@@ -56,6 +59,15 @@ uint32_t heaptop_buffer_caps(void)
   return MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 }
 
+static void _push_trends(heaptop_snapshot_t *w)
+{
+  heaptop_ring_push(&s_priv.trend[HEAPTOP_TREND_INTERNAL_FREE], w->region[HEAPTOP_REGION_INTERNAL].free);
+  heaptop_ring_push(&s_priv.trend[HEAPTOP_TREND_INTERNAL_LARGEST], w->region[HEAPTOP_REGION_INTERNAL].largest);
+  heaptop_ring_push(&s_priv.trend[HEAPTOP_TREND_PSRAM_FREE], w->region[HEAPTOP_REGION_PSRAM].free);
+  for (int k = 0; k < HEAPTOP_TREND_COUNT; k++)
+    w->trend_len = heaptop_ring_copy(&s_priv.trend[k], w->trend[k], HEAPTOP_TREND_LEN);
+}
+
 static void _sample_once(void)
 {
   heaptop_snapshot_t *w = s_priv.work;
@@ -67,8 +79,11 @@ static void _sample_once(void)
   s_priv.last_sample_us = t0;
   w->num_cores = portNUM_PROCESSORS > HEAPTOP_MAX_CORES ? HEAPTOP_MAX_CORES : portNUM_PROCESSORS;
 
+  w->period_ms = s_priv.cfg.sample_period_ms;
+
   heaptop_heap_sample(w);
   heaptop_tasks_sample(w);
+  _push_trends(w);
 
   w->seq = ++s_priv.seq;
   w->self_us = (uint32_t)((uint64_t)esp_timer_get_time() - t0);
@@ -124,6 +139,8 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
   s_priv.cfg = cfg;
   s_priv.seq = 0;
   s_priv.last_sample_us = 0;
+  for (int k = 0; k < HEAPTOP_TREND_COUNT; k++)
+    heaptop_ring_init(&s_priv.trend[k], s_priv.trend_mem[k], HEAPTOP_TREND_LEN);
 
   const uint32_t caps = heaptop_buffer_caps();
   esp_err_t err = ESP_ERR_NO_MEM;

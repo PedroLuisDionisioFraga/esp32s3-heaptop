@@ -26,6 +26,22 @@ typedef struct heaptop_calc_prev
   uint64_t counter;
 } heaptop_calc_prev_t;
 
+/** Fixed-capacity ring of 32-bit samples over caller memory. */
+typedef struct heaptop_ring
+{
+  uint32_t *buf;
+  uint16_t cap;
+  uint16_t head; /* next write position */
+  uint16_t count;
+} heaptop_ring_t;
+
+void heaptop_ring_init(heaptop_ring_t *r, uint32_t *buf, uint16_t cap);
+
+void heaptop_ring_push(heaptop_ring_t *r, uint32_t v);
+
+/** @brief Copy the newest min(count, max) values, oldest first. @return values copied. */
+uint16_t heaptop_ring_copy(const heaptop_ring_t *r, uint32_t *out, uint16_t max);
+
 /**
  * @brief Fragmentation of a region: share of free bytes outside the largest free block.
  * @return 0 (one contiguous block) .. 1000 (fully fragmented); 0 when @p free is 0.

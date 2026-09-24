@@ -2,6 +2,36 @@
 
 #include <ctype.h>
 
+void heaptop_ring_init(heaptop_ring_t *r, uint32_t *buf, uint16_t cap)
+{
+  if (r == NULL)
+    return;
+  r->buf = buf;
+  r->cap = buf ? cap : 0;
+  r->head = 0;
+  r->count = 0;
+}
+
+void heaptop_ring_push(heaptop_ring_t *r, uint32_t v)
+{
+  if (r == NULL || r->cap == 0)
+    return;
+  r->buf[r->head] = v;
+  r->head = (uint16_t)((r->head + 1u) % r->cap);
+  if (r->count < r->cap)
+    r->count++;
+}
+
+uint16_t heaptop_ring_copy(const heaptop_ring_t *r, uint32_t *out, uint16_t max)
+{
+  if (r == NULL || out == NULL || r->cap == 0)
+    return 0;
+  const uint16_t n = r->count < max ? r->count : max;
+  const uint16_t start = (uint16_t)((r->head + r->cap - n) % r->cap);
+  for (uint16_t i = 0; i < n; i++) out[i] = r->buf[(start + i) % r->cap];
+  return n;
+}
+
 uint16_t heaptop_calc_frag_pct10(uint32_t free, uint32_t largest)
 {
   if (free == 0 || largest >= free)

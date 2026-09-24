@@ -7,7 +7,10 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+#include <unistd.h>
 
 #include "esp_check.h"
 #include "esp_console.h"
@@ -16,8 +19,19 @@
 #include "heaptop.h"
 #include "heaptop_priv.h"
 #include "heaptop_render.h"
+#include "linenoise/linenoise.h"
 
-#define HEAPTOP_OUT_SIZE 6144
+#define HEAPTOP_OUT_SIZE       6144
+#define HEAPTOP_REFRESH_MIN_MS 100
+#define HEAPTOP_REFRESH_MAX_MS 10000
+#define HEAPTOP_KEY_CTRL_C     0x03
+
+/* ANSI: alternate screen + hidden cursor while `ht top` owns the terminal. */
+#define HEAPTOP_ANSI_ENTER "\x1b[?1049h\x1b[?25l"
+#define HEAPTOP_ANSI_LEAVE "\x1b[?25h\x1b[?1049l"
+#define HEAPTOP_ANSI_HOME  "\x1b[H"
+#define HEAPTOP_ANSI_EOL   "\x1b[K"
+#define HEAPTOP_ANSI_EOS   "\x1b[J"
 
 static const char *TAG = "HEAPTOP_CON";
 
@@ -109,7 +123,126 @@ static int _cmd_tasks(int argc, char **argv)
   return 0;
 }
 
+/* Wait up to @p ms for one byte on stdin; -1 on timeout. The wait doubles as the refresh tick. */
+static int _wait_key(uint32_t ms)
+{
+  const int fd = fileno(stdin);
+  fd_set rfds;
+  FD_ZERO(&rfds);
+  FD_SET(fd, &rfds);
+  struct timeval tv = {.tv_sec = ms / 1000u, .tv_usec = (ms % 1000u) * 1000u};
+  if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0)
+    return -1;
+  unsigned char c;
+  return read(fd, &c, 1) == 1 ? c : -1;
+}
+
+/* Frame in place: home, each line cleared to its end, rest of the screen cleared. */
+static void _draw_frame(const heaptop_buf_t *b, bool ansi)
+{
+  if (!ansi)
+  {
+    _flush(b);
+    fputs("----\n", stdout);
+    fflush(stdout);
+    return;
+  }
+  fputs(HEAPTOP_ANSI_HOME, stdout);
+  const char *line = b->p;
+  const char *end = b->p + b->len;
+  while (line < end)
+  {
+    const char *nl = memchr(line, '\n', (size_t)(end - line));
+    const size_t n = nl ? (size_t)(nl - line) : (size_t)(end - line);
+    fwrite(line, 1, n, stdout);
+    fputs(HEAPTOP_ANSI_EOL "\n", stdout);
+    line += n + 1;
+  }
+  fputs(HEAPTOP_ANSI_EOS, stdout);
+  fflush(stdout);
+}
+
+static int _cmd_top(int argc, char **argv)
+{
+  heaptop_top_view_t view = {.sort = HEAPTOP_SORT_CPU, .paused = false, .refresh_ms = 1000};
+  if (argc > 1)
+  {
+    char *end = NULL;
+    unsigned long ms = strtoul(argv[1], &end, 10);
+    if (end == argv[1] || *end != '\0' || ms < HEAPTOP_REFRESH_MIN_MS || ms > HEAPTOP_REFRESH_MAX_MS)
+    {
+      printf("ht top: refresh must be %d..%d ms\n", HEAPTOP_REFRESH_MIN_MS, HEAPTOP_REFRESH_MAX_MS);
+      return 1;
+    }
+    view.refresh_ms = (uint32_t)ms;
+  }
+  if (!_load_snapshot())
+    return 1;
+
+  /* ESP_LOG lines from other tasks still land on screen; the next frame overwrites them. */
+  const bool ansi = !linenoiseIsDumbMode();
+  if (ansi)
+    fputs(HEAPTOP_ANSI_ENTER, stdout);
+
+  uint32_t shown_seq = 0;
+  bool redraw = true;
+  for (;;)
+  {
+    if (!view.paused && heaptop_get_snapshot(s_con.snap) == ESP_OK && s_con.snap->seq != shown_seq)
+      redraw = true;
+    if (redraw)
+    {
+      heaptop_buf_t b;
+      heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
+      heaptop_render_top(&b, s_con.snap, &view);
+      _draw_frame(&b, ansi);
+      shown_seq = s_con.snap->seq;
+      redraw = false;
+    }
+
+    const int key = _wait_key(view.refresh_ms);
+    if (key < 0)
+      continue;
+    redraw = true;
+    if (key == 'q' || key == 'Q' || key == HEAPTOP_KEY_CTRL_C)
+      break;
+    switch (key)
+    {
+      case 'c':
+        view.sort = HEAPTOP_SORT_CPU;
+        break;
+      case 'm':
+        view.sort = HEAPTOP_SORT_HEAP;
+        break;
+      case 's':
+        view.sort = HEAPTOP_SORT_STACK;
+        break;
+      case 'n':
+        view.sort = HEAPTOP_SORT_NAME;
+        break;
+      case 'p':
+        view.paused = !view.paused;
+        break;
+      case '+':
+        view.refresh_ms = view.refresh_ms * 2 > HEAPTOP_REFRESH_MAX_MS ? HEAPTOP_REFRESH_MAX_MS : view.refresh_ms * 2;
+        break;
+      case '-':
+        view.refresh_ms = view.refresh_ms / 2 < HEAPTOP_REFRESH_MIN_MS ? HEAPTOP_REFRESH_MIN_MS : view.refresh_ms / 2;
+        break;
+      default:
+        redraw = false; /* arrow keys and other escape bytes */
+        break;
+    }
+  }
+
+  if (ansi)
+    fputs(HEAPTOP_ANSI_LEAVE, stdout);
+  fflush(stdout);
+  return 0;
+}
+
 static const heaptop_sub_t s_subs[] = {
+  {"top", "[refresh_ms]", "Live view; q quits, c/m/s/n sort, +/- refresh, p pause", _cmd_top},
   {"heap", "", "Heap regions: free, min free, largest block, fragmentation", _cmd_heap},
   {"tasks", "[cpu|heap|stack|name]", "Tasks: state, CPU %, stack high-water mark, heap held", _cmd_tasks},
 };
