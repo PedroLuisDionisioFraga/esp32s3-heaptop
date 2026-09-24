@@ -427,7 +427,7 @@ void heaptop_render_allocs(heaptop_buf_t *b, const heaptop_snapshot_t *s, const 
   {
     const heaptop_fail_t *f = &fails[i];
     const uint64_t age = s->uptime_us > f->t_us ? (s->uptime_us - f->t_us) / 100000u : 0;
-    char agestr[16], size[12], hex[16];
+    char agestr[24], size[12], hex[16]; /* agestr fits a 64-bit unsigned long: 20 digits + ".9s" */
     snprintf(agestr, sizeof(agestr), "%lu.%lus", (unsigned long)(age / 10u), (unsigned long)(age % 10u));
     heaptop_fmt_bytes(size, sizeof(size), f->size);
     heaptop_buf_printf(b,
