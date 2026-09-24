@@ -132,7 +132,9 @@ esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups);
 /**
  * @brief Register the alert callback; NULL removes it.
  *
- * Alerts are also logged with ESP_LOGW when they turn on.
+ * Alerts are also logged with ESP_LOGW when they turn on. Replacing or removing
+ * the callback does not wait for a call already running in the sampler: keep
+ * @p ctx valid until at least one more sample period has passed.
  */
 esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx);
 

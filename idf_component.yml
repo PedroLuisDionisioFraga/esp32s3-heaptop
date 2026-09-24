@@ -6,7 +6,7 @@ url: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop"
 repository: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop"
 documentation: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop/tree/main/README.md"
 issues: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop/issues"
-# Only the chips CI builds for; esp32s3 is the hardware-tested target.
+# Only the chips CI builds for; esp32s3 (with PSRAM) is the primary target.
 targets:
   - esp32
   - esp32s3

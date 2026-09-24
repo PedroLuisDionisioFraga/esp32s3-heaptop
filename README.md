@@ -64,10 +64,9 @@ void app_main(void)
 }
 ```
 
-Then enable the IDF data sources heaptop reads, for example in `sdkconfig.defaults`:
+Heaptop turns on `CONFIG_FREERTOS_USE_TRACE_FACILITY` itself (it needs `uxTaskGetSystemState()`; the cost is a few bytes per task). Then enable the IDF data sources heaptop reads, for example in `sdkconfig.defaults`:
 
 ```
-CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
 CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
@@ -125,7 +124,7 @@ main             R     1    0   21.4    4.1K    3.7K    8.9K       0
 heaptop          Y     1    -    1.8    1.9K       0       0       0
 stress_leak      B     1    -    0.3    2.6K   13.0K   13.0K       0  LEAK?
 esp_timer        S    22    0    0.1    3.2K     104     104       0
-ipc0             S    24    0    0.0     508       0       0       0
+ipc0             S    24    0    0.0     588       0       0       0
 worker           X     -    -      -       -    2.0K    2.0K       0
 ```
 
@@ -142,7 +141,7 @@ idf.py monitor decodes the 0x4... addresses into function and file:line
 A typical leak hunt:
 
 1. `ht top`, and watch for `LEAK?` or a falling free/largest sparkline.
-2. `ht leaks start`, exercise the suspect code path, then `ht leaks stop`.
+2. `ht leaks start`, exercise the suspect code path, then `ht leaks stop`. (`ht leaks report` also works while the capture runs: it pauses the capture for the moment it takes to print, so a block freed in that moment can still be listed.)
 3. Read the call stacks in `idf.py monitor`. `ht mark` before and `ht diff` after the operation show which task kept the memory.
 
 ## Configuration
@@ -180,7 +179,7 @@ A typical leak hunt:
 {"ht":1,"type":"alert","t_ms":184250,"alert":"leak","active":true,"msg":"task 'stress_leak' heap grew +12.0K without giving memory back"}
 ```
 
-At 115200 baud (about 11 KB/s), one sample with 32 tasks is about 3 KB, so 1 Hz fits. For faster streaming, raise `CONFIG_ESP_CONSOLE_UART_BAUDRATE`.
+A task line is about 200 bytes and a sample line about 700, so one sample with 32 tasks is about 7 KB: at 115200 baud (about 11 KB/s) 1 Hz uses most of the link. Stream less often (`ht stream 2000`), or raise `CONFIG_ESP_CONSOLE_UART_BAUDRATE`.
 
 ## Alerts
 
@@ -196,7 +195,7 @@ At 115200 baud (about 11 KB/s), one sample with 32 tasks is about 3 KB, so 1 Hz 
 
 A limit of 0 turns its alert off. An alert clears only after the value moves `HEAPTOP_ALERT_HYSTERESIS_PCT` (10%) back past the limit, so it does not flap. Limits can be changed at runtime with `ht alerts set frag 70` or `heaptop_set_thresholds()`.
 
-A task is a leak suspect when its heap has grown by at least `HEAPTOP_ALERT_TASK_GROWTH` over its history (at least 8 samples), never dropped below where it started, and is still within 10% of its peak. A task that allocates a buffer and later frees it does not qualify.
+A task is a leak suspect when, over its history (at least 8 samples), its heap grew by at least `HEAPTOP_ALERT_TASK_GROWTH` in at least three separate steps, was still growing in the second half of the window, never dropped below where it started, and still holds at least 90% of its peak. A task that takes one long-lived buffer, finishes its start-up allocations, or frees what it took does not qualify.
 
 Each transition is logged once (`ESP_LOGW` when it fires, `ESP_LOGI` when it clears; logs are held back while `ht top` or `ht stream` owns the terminal) and passed to the optional callback:
 
@@ -235,7 +234,7 @@ The IDF features heaptop reads have costs of their own. Task tracking and heap t
 
 ## Caveats
 
-- **Heap hooks.** Heaptop defines `esp_heap_trace_alloc_hook()` and `esp_heap_trace_free_hook()`. If your application defines them too, disable `HEAPTOP_ALLOC_HOOKS`. An in-place `realloc` calls the alloc hook without a matching free, so allocation counts run slightly ahead of frees in realloc-heavy code.
+- **Heap hooks.** Heaptop defines `esp_heap_trace_alloc_hook()` and `esp_heap_trace_free_hook()`. The definitions are weak (IDF declares them that way): if your application defines them too, yours win silently and heaptop's allocation rates stay at 0, so disable `HEAPTOP_ALLOC_HOOKS`. An in-place `realloc` calls the alloc hook without a matching free, so allocation counts run slightly ahead of frees in realloc-heavy code.
 - **Failed-allocation callback.** IDF has one slot for it, and it cannot be unregistered. Disable `HEAPTOP_FAILED_ALLOC_CALLBACK` if your application needs the slot.
 - **Task tracking.** With `CONFIG_HEAP_TASK_TRACKING`, allocating while the scheduler is suspended or from an ISR crashes. That is an IDF constraint, not heaptop's. Task tracking's own bookkeeping is not visible in any statistic.
 - **heap_trace.** While `ht leaks` runs, heaptop owns the global `heap_trace`. Do not start another trace at the same time. Leak capture needs internal RAM for its records: records in PSRAM would miss allocations made from ISRs.
