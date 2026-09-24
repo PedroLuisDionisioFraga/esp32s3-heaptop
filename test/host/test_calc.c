@@ -394,6 +394,74 @@ static void test_growth_track_evicts_task_not_seen_last_sample(void)
   TEST_ASSERT_EQUAL_UINT16(0, c->count);
 }
 
+static heaptop_snapshot_t s_msnap;
+
+static void _live_row(uintptr_t handle, const char *name)
+{
+  heaptop_task_stats_t *t = &s_msnap.tasks[s_msnap.task_count++];
+  memset(t, 0, sizeof(*t));
+  strcpy(t->name, name);
+  t->handle = handle;
+  t->state = HEAPTOP_TASK_BLOCKED;
+}
+
+static void test_merge_fills_live_row(void)
+{
+  memset(&s_msnap, 0, sizeof(s_msnap));
+  _live_row(0x10, "app");
+  const heaptop_heap_owner_t o[] = {
+    {.handle = 0x10, .name = "app", .alive = true, .cur = 500, .peak = 900, .psram = 100}};
+  TEST_ASSERT_TRUE(heaptop_calc_merge_heap(&s_msnap, o, 1));
+  TEST_ASSERT_EQUAL_UINT16(1, s_msnap.task_count);
+  TEST_ASSERT_EQUAL_UINT32(500, s_msnap.tasks[0].heap_cur);
+  TEST_ASSERT_EQUAL_UINT32(900, s_msnap.tasks[0].heap_peak);
+  TEST_ASSERT_EQUAL_UINT32(100, s_msnap.tasks[0].heap_psram);
+}
+
+static void _check_reused_handle(const heaptop_heap_owner_t *o, size_t n)
+{
+  memset(&s_msnap, 0, sizeof(s_msnap));
+  _live_row(0x10, "new");
+  TEST_ASSERT_TRUE(heaptop_calc_merge_heap(&s_msnap, o, n));
+  TEST_ASSERT_EQUAL_UINT16(2, s_msnap.task_count);
+  TEST_ASSERT_EQUAL_UINT32(500, s_msnap.tasks[0].heap_cur);
+  TEST_ASSERT_EQUAL_STRING("old", s_msnap.tasks[1].name);
+  TEST_ASSERT_EQUAL_UINT8(HEAPTOP_TASK_DELETED, s_msnap.tasks[1].state);
+  TEST_ASSERT_EQUAL_UINT32(2048, s_msnap.tasks[1].heap_cur);
+  TEST_ASSERT_EQUAL_INT8(-1, s_msnap.tasks[1].core);
+}
+
+static void test_merge_keeps_dead_task_apart_when_handle_is_reused(void)
+{
+  const heaptop_heap_owner_t dead_first[] = {{.handle = 0x10, .name = "old", .alive = false, .cur = 2048, .peak = 2048},
+                                             {.handle = 0x10, .name = "new", .alive = true, .cur = 500, .peak = 500}};
+  _check_reused_handle(dead_first, 2);
+  const heaptop_heap_owner_t alive_first[] = {
+    {.handle = 0x10, .name = "new", .alive = true, .cur = 500, .peak = 500},
+    {.handle = 0x10, .name = "old", .alive = false, .cur = 2048, .peak = 2048}};
+  _check_reused_handle(alive_first, 2);
+}
+
+static void test_merge_skips_empty_dead_and_unlisted_alive(void)
+{
+  memset(&s_msnap, 0, sizeof(s_msnap));
+  _live_row(0x10, "app");
+  const heaptop_heap_owner_t o[] = {{.handle = 0x20, .name = "gone", .alive = false, .cur = 0},
+                                    {.handle = 0, .name = "Pre-scheduler", .alive = true, .cur = 30000}};
+  TEST_ASSERT_TRUE(heaptop_calc_merge_heap(&s_msnap, o, 2));
+  TEST_ASSERT_EQUAL_UINT16(1, s_msnap.task_count);
+}
+
+static void test_merge_reports_full_table(void)
+{
+  memset(&s_msnap, 0, sizeof(s_msnap));
+  for (uint16_t i = 0; i < HEAPTOP_MAX_TASKS; i++) _live_row(0x100 + i, "t");
+  const heaptop_heap_owner_t o[] = {{.handle = 0x20, .name = "gone", .alive = false, .cur = 64}};
+  TEST_ASSERT_FALSE(heaptop_calc_merge_heap(&s_msnap, o, 1));
+  TEST_ASSERT_TRUE(s_msnap.tasks_truncated);
+  TEST_ASSERT_EQUAL_UINT16(HEAPTOP_MAX_TASKS, s_msnap.task_count);
+}
+
 static void test_below_floor_fires_and_clears_with_hysteresis(void)
 {
   TEST_ASSERT_FALSE(heaptop_calc_below_floor(false, 1000, 1000, 10));
@@ -483,6 +551,10 @@ static void test_alerts_keep_state_inside_hysteresis(void)
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_merge_fills_live_row);
+  RUN_TEST(test_merge_keeps_dead_task_apart_when_handle_is_reused);
+  RUN_TEST(test_merge_skips_empty_dead_and_unlisted_alive);
+  RUN_TEST(test_merge_reports_full_table);
   RUN_TEST(test_below_floor_fires_and_clears_with_hysteresis);
   RUN_TEST(test_above_ceiling_fires_and_clears_with_hysteresis);
   RUN_TEST(test_alerts_quiet_when_healthy);

@@ -160,6 +160,28 @@ bool heaptop_calc_above_ceiling(bool active, uint32_t value, uint32_t ceiling, u
 uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snapshot_t *s, uint32_t active,
                              uint32_t prev_failures);
 
+/** One IDF task-tracking entry, reduced to what heaptop shows. */
+typedef struct heaptop_heap_owner
+{
+  uintptr_t handle;
+  const char *name;
+  bool alive;
+  uint32_t cur;
+  uint32_t peak;
+  uint32_t psram;
+} heaptop_heap_owner_t;
+
+/**
+ * @brief Merge task-tracking entries into the snapshot's task rows.
+ *
+ * Alive entries fill the live row with the same handle; alive entries with no
+ * row (the "Pre-scheduler" bucket) are skipped. Dead entries that still hold
+ * heap become their own deleted rows, even when a live task reuses the handle.
+ *
+ * @return false when a deleted row did not fit (s->tasks_truncated is set).
+ */
+bool heaptop_calc_merge_heap(heaptop_snapshot_t *s, const heaptop_heap_owner_t *owners, size_t n);
+
 /**
  * @brief Order task indices by @p key without moving the tasks.
  *

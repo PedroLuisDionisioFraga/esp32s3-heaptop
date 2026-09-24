@@ -257,6 +257,59 @@ uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snaps
   return out;
 }
 
+static void _set_heap(heaptop_task_stats_t *t, const heaptop_heap_owner_t *o)
+{
+  t->heap_cur = o->cur;
+  t->heap_peak = o->peak;
+  t->heap_psram = o->psram;
+}
+
+bool heaptop_calc_merge_heap(heaptop_snapshot_t *s, const heaptop_heap_owner_t *owners, size_t n)
+{
+  if (s == NULL || owners == NULL)
+    return true;
+  /* Only rows that came from the scheduler are matched; deleted rows appended
+   * below never are, so a reused handle cannot mix a dead task into a live one. */
+  const uint16_t live = s->task_count > HEAPTOP_MAX_TASKS ? HEAPTOP_MAX_TASKS : s->task_count;
+  bool fit = true;
+  for (size_t i = 0; i < n; i++)
+  {
+    const heaptop_heap_owner_t *o = &owners[i];
+    if (o->alive)
+    {
+      for (uint16_t r = 0; r < live; r++)
+      {
+        if (s->tasks[r].handle == o->handle)
+        {
+          _set_heap(&s->tasks[r], o);
+          break;
+        }
+      }
+      continue;
+    }
+    if (o->cur == 0)
+      continue;
+    if (s->task_count >= HEAPTOP_MAX_TASKS)
+    {
+      s->tasks_truncated = true;
+      fit = false;
+      continue;
+    }
+    heaptop_task_stats_t *t = &s->tasks[s->task_count++];
+    memset(t, 0, sizeof(*t));
+    if (o->name)
+    {
+      strncpy(t->name, o->name, sizeof(t->name) - 1);
+      t->name[sizeof(t->name) - 1] = '\0';
+    }
+    t->handle = o->handle;
+    t->state = HEAPTOP_TASK_DELETED;
+    t->core = -1;
+    _set_heap(t, o);
+  }
+  return fit;
+}
+
 uint16_t heaptop_calc_frag_pct10(uint32_t free, uint32_t largest)
 {
   if (free == 0 || largest >= free)

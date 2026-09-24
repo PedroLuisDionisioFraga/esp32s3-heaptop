@@ -37,6 +37,7 @@ typedef struct heaptop_tasks_priv
 #if CONFIG_HEAPTOP_TASK_HEAP
   task_stat_t *tstat;
   heap_stat_t *hstat;
+  heaptop_heap_owner_t *owners;        /* tstat reduced for heaptop_calc_merge_heap() */
   heaptop_growth_slot_t *growth_slots; /* per-task heap history for leak suspicion */
   uint32_t *growth_mem;
   uint32_t *history; /* scratch: one task's history, oldest first */
@@ -63,10 +64,12 @@ esp_err_t heaptop_tasks_init(uint32_t caps)
 #if CONFIG_HEAPTOP_TASK_HEAP
   s_tasks.tstat = heap_caps_calloc(HEAPTOP_TSTAT_CAP, sizeof(task_stat_t), caps);
   s_tasks.hstat = heap_caps_calloc(HEAPTOP_TSTAT_CAP * HEAPTOP_HEAPS_PER_TASK, sizeof(heap_stat_t), caps);
+  s_tasks.owners = heap_caps_calloc(HEAPTOP_TSTAT_CAP, sizeof(heaptop_heap_owner_t), caps);
   s_tasks.growth_slots = heap_caps_calloc(HEAPTOP_MAX_TASKS, sizeof(heaptop_growth_slot_t), caps);
   s_tasks.growth_mem = heap_caps_calloc((size_t)HEAPTOP_MAX_TASKS * CONFIG_HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
   s_tasks.history = heap_caps_calloc(CONFIG_HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
-  ok = ok && s_tasks.tstat && s_tasks.hstat && s_tasks.growth_slots && s_tasks.growth_mem && s_tasks.history;
+  ok = ok && s_tasks.tstat && s_tasks.hstat && s_tasks.owners && s_tasks.growth_slots && s_tasks.growth_mem &&
+       s_tasks.history;
 #endif
   if (!ok)
   {
@@ -95,6 +98,7 @@ void heaptop_tasks_deinit(void)
 #if CONFIG_HEAPTOP_TASK_HEAP
   heap_caps_free(s_tasks.tstat);
   heap_caps_free(s_tasks.hstat);
+  heap_caps_free(s_tasks.owners);
   heap_caps_free(s_tasks.growth_slots);
   heap_caps_free(s_tasks.growth_mem);
   heap_caps_free(s_tasks.history);
@@ -118,18 +122,6 @@ static uint8_t _state(eTaskState st)
       return HEAPTOP_TASK_DELETED;
   }
 }
-
-#if CONFIG_HEAPTOP_TASK_HEAP
-static heaptop_task_stats_t *_find(heaptop_snapshot_t *s, uintptr_t handle)
-{
-  for (uint16_t i = 0; i < s->task_count; i++)
-  {
-    if (s->tasks[i].handle == handle)
-      return &s->tasks[i];
-  }
-  return NULL;
-}
-#endif
 
 #if HEAPTOP_HAS_RUNTIME_STATS
 /* Run time of a task over the last interval; a task new since then reports its whole run time. */
@@ -221,40 +213,30 @@ static void _sample_task_heap(heaptop_snapshot_t *s)
   if (heap_caps_get_all_task_stat(&all) != ESP_OK)
     return;
   s->features |= HEAPTOP_FEAT_TASK_HEAP;
+  /* Deleted tasks stay in IDF's list forever; a full table may hide live tasks. */
+  if (all.task_count >= HEAPTOP_TSTAT_CAP)
+    s->tasks_truncated = true;
 
   for (size_t i = 0; i < all.task_count; i++)
   {
     const task_stat_t *ts = &s_tasks.tstat[i];
-    heaptop_task_stats_t *t = _find(s, (uintptr_t)ts->handle);
-    if (t == NULL)
-    {
-      /* A deleted task that still owns heap is a leak by definition; show it.
-       * Alive-but-unlisted entries (the "Pre-scheduler" bucket) are skipped. */
-      if (ts->is_alive || ts->overall_current_usage == 0)
-        continue;
-      if (s->task_count >= HEAPTOP_MAX_TASKS)
-      {
-        s->tasks_truncated = true;
-        continue;
-      }
-      t = &s->tasks[s->task_count++];
-      strlcpy(t->name, ts->name, sizeof(t->name));
-      t->handle = (uintptr_t)ts->handle;
-      t->state = HEAPTOP_TASK_DELETED;
-      t->core = -1;
-    }
-    t->heap_cur = (uint32_t)ts->overall_current_usage;
-    t->heap_peak = (uint32_t)ts->overall_peak_usage;
-    t->heap_psram = 0;
+    heaptop_heap_owner_t *o = &s_tasks.owners[i];
+    o->handle = (uintptr_t)ts->handle;
+    o->name = ts->name;
+    o->alive = ts->is_alive;
+    o->cur = (uint32_t)ts->overall_current_usage;
+    o->peak = (uint32_t)ts->overall_peak_usage;
+    o->psram = 0;
     if (ts->heap_stat != NULL)
     {
       for (size_t h = 0; h < ts->heap_count; h++)
       {
         if (ts->heap_stat[h].caps & MALLOC_CAP_SPIRAM)
-          t->heap_psram += (uint32_t)ts->heap_stat[h].current_usage;
+          o->psram += (uint32_t)ts->heap_stat[h].current_usage;
       }
     }
   }
+  heaptop_calc_merge_heap(s, s_tasks.owners, all.task_count);
 }
 #endif
 
@@ -267,6 +249,9 @@ static void _update_leak_suspicion(heaptop_snapshot_t *s)
   for (uint16_t i = 0; i < s->task_count; i++)
   {
     heaptop_task_stats_t *t = &s->tasks[i];
+    /* A dead task cannot grow, and its handle may already belong to a live one. */
+    if (t->state == HEAPTOP_TASK_DELETED)
+      continue;
     heaptop_ring_t *ring = heaptop_growth_track(&s_tasks.growth, t->handle, s_tasks.sample_no);
     if (ring == NULL)
       continue;
