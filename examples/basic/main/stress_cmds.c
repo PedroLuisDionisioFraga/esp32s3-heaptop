@@ -18,10 +18,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define STRESS_MAX_BLOCKS     512
-#define STRESS_TASK_STACK     4096
-#define STRESS_TASK_PRIO      1
-#define STRESS_STACK_TASK_MAX 3584 /* leave room for the task's own frames */
+#define STRESS_MAX_BLOCKS 512
+#define STRESS_TASK_STACK 4096
+#define STRESS_TASK_PRIO  1
+/* Leaves 768 bytes for the task's own frames: enough headroom to stay safe,
+ * little enough that the maximum trips the default 512-byte stack alert. */
+#define STRESS_STACK_TASK_MAX (STRESS_TASK_STACK - 768)
 #define STRESS_CPU_WINDOW_MS  100
 #define STRESS_CPU_MAX_PCT    90 /* keep the idle task (and its watchdog) alive */
 #define STRESS_FRAG_SMALL     32
@@ -93,15 +95,13 @@ static void _cpu_task(void *arg)
   vTaskDelete(NULL);
 }
 
-/* Uses about @p bytes of stack; touching buf after the call prevents a tail call. */
+/* Touches exactly @p bytes of stack in one frame, so the high-water mark drops
+ * by that much plus a small, fixed frame (recursion would add per-level frames). */
 static uint32_t _burn_stack(uint32_t bytes)
 {
-  volatile uint8_t buf[256];
-  memset((void *)buf, (int)bytes, sizeof(buf));
-  uint32_t sum = buf[0];
-  if (bytes > sizeof(buf))
-    sum += _burn_stack(bytes - sizeof(buf));
-  return sum + buf[sizeof(buf) - 1];
+  volatile uint8_t *buf = __builtin_alloca(bytes);
+  memset((void *)buf, 0x5A, bytes);
+  return buf[0] + buf[bytes - 1];
 }
 
 static void _stack_task(void *arg)
@@ -268,9 +268,9 @@ static int _cmd_stress(int argc, char **argv)
     return _fail(a);
   if (strcmp(w, "stack") == 0)
   {
-    if (a > STRESS_STACK_TASK_MAX)
+    if (a == 0 || a > STRESS_STACK_TASK_MAX)
     {
-      printf("stress stack: at most %d bytes\n", STRESS_STACK_TASK_MAX);
+      printf("stress stack: bytes must be 1..%d\n", STRESS_STACK_TASK_MAX);
       return 1;
     }
     s_stress.stack_bytes = a;
