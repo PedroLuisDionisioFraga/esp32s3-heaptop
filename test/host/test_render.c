@@ -399,10 +399,109 @@ static void test_allocs_reports_disabled_sources(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK"));
 }
 
+static void test_leaks_off_names_the_option(void)
+{
+  const heaptop_leak_info_t info = {.available = false};
+  heaptop_render_leaks(&s_buf, &info, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAP_TRACING_STANDALONE"));
+}
+
+static void test_leaks_header_and_rows(void)
+{
+  const heaptop_leak_info_t info = {.available = true, .duration_ms = 30200, .records = 37, .capacity = 256};
+  heaptop_leak_group_t g[2];
+  memset(g, 0, sizeof(g));
+  g[0] = (heaptop_leak_group_t){.pc = {0x42001234, 0x42005678},
+                                .count = 36,
+                                .bytes = 9216,
+                                .min_size = 256,
+                                .max_size = 256};
+  g[1] = (heaptop_leak_group_t){.pc = {0x4200abcd}, .count = 1, .bytes = 512, .min_size = 16, .max_size = 496};
+  char line[256];
+  heaptop_render_leaks(&s_buf, &info, g, 2);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "stopped"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "30.2s"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "37 surviving"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "37/256"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "0x42001234", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "9.0K"));
+  TEST_ASSERT_NOT_NULL(strstr(line, " 36 "));
+  TEST_ASSERT_NOT_NULL(strstr(line, "0x42005678"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "0x4200abcd", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "16..496"));
+}
+
+static void test_leaks_running_overflow_and_empty(void)
+{
+  const heaptop_leak_info_t info =
+    {.available = true, .running = true, .duration_ms = 5000, .records = 0, .capacity = 256, .overflowed = true};
+  heaptop_render_leaks(&s_buf, &info, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "running"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAPTOP_LEAK_RECORDS"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "no surviving allocations"));
+}
+
+static heaptop_snapshot_t s_before;
+
+static void _task_in(heaptop_snapshot_t *s, const char *name, uintptr_t handle, uint32_t heap)
+{
+  heaptop_task_stats_t *t = &s->tasks[s->task_count++];
+  memset(t, 0, sizeof(*t));
+  strcpy(t->name, name);
+  t->handle = handle;
+  t->heap_cur = heap;
+}
+
+static void test_diff_regions_and_tasks(void)
+{
+  memset(&s_before, 0, sizeof(s_before));
+  s_before.seq = 10;
+  s_before.uptime_us = 10ULL * 1000000u;
+  s_before.features = HEAPTOP_FEAT_TASK_HEAP;
+  s_before.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 204800};
+  _task_in(&s_before, "wifi", 0x1, 4096);
+  _task_in(&s_before, "steady", 0x2, 1000);
+  _task_in(&s_before, "oldtask", 0x3, 2048);
+
+  s_snap.seq = 75;
+  s_snap.uptime_us = 75ULL * 1000000u;
+  s_snap.features = HEAPTOP_FEAT_TASK_HEAP;
+  s_snap.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 184320};
+  _task_in(&s_snap, "wifi", 0x1, 6144);
+  _task_in(&s_snap, "steady", 0x2, 1000);
+  _task_in(&s_snap, "newtask", 0x4, 1024);
+
+  char line[256];
+  heaptop_render_diff(&s_buf, &s_before, &s_snap);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "1m05s"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "internal", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "-20.0K"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "wifi", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "+2.0K"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "newtask", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "(new)"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "oldtask", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "(gone)"));
+  TEST_ASSERT_NULL(strstr(s_mem, "steady"));
+}
+
+static void test_diff_without_mark(void)
+{
+  memset(&s_before, 0, sizeof(s_before));
+  s_snap.seq = 5;
+  heaptop_render_diff(&s_buf, &s_before, &s_snap);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "ht mark"));
+}
+
 int main(void)
 {
   UNITY_BEGIN();
   RUN_TEST(test_top_shows_alloc_rates_when_hooks_on);
+  RUN_TEST(test_leaks_off_names_the_option);
+  RUN_TEST(test_leaks_header_and_rows);
+  RUN_TEST(test_leaks_running_overflow_and_empty);
+  RUN_TEST(test_diff_regions_and_tasks);
+  RUN_TEST(test_diff_without_mark);
   RUN_TEST(test_frag_histogram_rows);
   RUN_TEST(test_frag_histogram_empty_region);
   RUN_TEST(test_allocs_rates_line);

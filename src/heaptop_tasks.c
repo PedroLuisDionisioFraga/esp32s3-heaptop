@@ -36,6 +36,11 @@ typedef struct heaptop_tasks_priv
 #if CONFIG_HEAPTOP_TASK_HEAP
   task_stat_t *tstat;
   heap_stat_t *hstat;
+  heaptop_growth_slot_t *growth_slots; /* per-task heap history for leak suspicion */
+  uint32_t *growth_mem;
+  uint32_t *history; /* scratch: one task's history, oldest first */
+  heaptop_growth_t growth;
+  uint32_t sample_no;
 #endif
 
   /* --- Sampler-owned state. --- */
@@ -57,13 +62,23 @@ esp_err_t heaptop_tasks_init(uint32_t caps)
 #if CONFIG_HEAPTOP_TASK_HEAP
   s_tasks.tstat = heap_caps_calloc(HEAPTOP_TSTAT_CAP, sizeof(task_stat_t), caps);
   s_tasks.hstat = heap_caps_calloc(HEAPTOP_TSTAT_CAP * HEAPTOP_HEAPS_PER_TASK, sizeof(heap_stat_t), caps);
-  ok = ok && s_tasks.tstat && s_tasks.hstat;
+  s_tasks.growth_slots = heap_caps_calloc(HEAPTOP_MAX_TASKS, sizeof(heaptop_growth_slot_t), caps);
+  s_tasks.growth_mem = heap_caps_calloc((size_t)HEAPTOP_MAX_TASKS * CONFIG_HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
+  s_tasks.history = heap_caps_calloc(CONFIG_HEAPTOP_HISTORY_LEN, sizeof(uint32_t), caps);
+  ok = ok && s_tasks.tstat && s_tasks.hstat && s_tasks.growth_slots && s_tasks.growth_mem && s_tasks.history;
 #endif
   if (!ok)
   {
     heaptop_tasks_deinit();
     return ESP_ERR_NO_MEM;
   }
+#if CONFIG_HEAPTOP_TASK_HEAP
+  heaptop_growth_init(&s_tasks.growth,
+                      s_tasks.growth_slots,
+                      HEAPTOP_MAX_TASKS,
+                      s_tasks.growth_mem,
+                      CONFIG_HEAPTOP_HISTORY_LEN);
+#endif
 #if !CONFIG_FREERTOS_SMP
   for (int c = 0; c < portNUM_PROCESSORS && c < HEAPTOP_MAX_CORES; c++)
     s_tasks.idle[c] = xTaskGetIdleTaskHandleForCore(c);
@@ -79,6 +94,9 @@ void heaptop_tasks_deinit(void)
 #if CONFIG_HEAPTOP_TASK_HEAP
   heap_caps_free(s_tasks.tstat);
   heap_caps_free(s_tasks.hstat);
+  heap_caps_free(s_tasks.growth_slots);
+  heap_caps_free(s_tasks.growth_mem);
+  heap_caps_free(s_tasks.history);
 #endif
   memset(&s_tasks, 0, sizeof(s_tasks));
 }
@@ -239,10 +257,30 @@ static void _sample_task_heap(heaptop_snapshot_t *s)
 }
 #endif
 
+#if CONFIG_HEAPTOP_TASK_HEAP
+/* Push each task's heap into its history and flag steady, unreleased growth. */
+static void _update_leak_suspicion(heaptop_snapshot_t *s)
+{
+  s_tasks.sample_no++;
+  for (uint16_t i = 0; i < s->task_count; i++)
+  {
+    heaptop_task_stats_t *t = &s->tasks[i];
+    heaptop_ring_t *ring = heaptop_growth_track(&s_tasks.growth, t->handle, s_tasks.sample_no);
+    if (ring == NULL)
+      continue;
+    heaptop_ring_push(ring, t->heap_cur);
+    const uint16_t n = heaptop_ring_copy(ring, s_tasks.history, CONFIG_HEAPTOP_HISTORY_LEN);
+    t->leak_suspect =
+      heaptop_calc_leak_suspect(s_tasks.history, n, (uint32_t)CONFIG_HEAPTOP_ALERT_TASK_GROWTH, &t->heap_growth);
+  }
+}
+#endif
+
 void heaptop_tasks_sample(heaptop_snapshot_t *s)
 {
   _sample_cpu_and_stack(s);
 #if CONFIG_HEAPTOP_TASK_HEAP
   _sample_task_heap(s);
+  _update_leak_suspicion(s);
 #endif
 }

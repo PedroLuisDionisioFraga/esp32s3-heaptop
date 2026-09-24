@@ -259,9 +259,132 @@ static void test_fail_copy_after_wrap_and_limited(void)
   TEST_ASSERT_EQUAL_UINT32(6, out[1].size);
 }
 
+static void test_leak_add_groups_same_call_stack(void)
+{
+  heaptop_leak_group_t g[4];
+  size_t n = 0;
+  const uintptr_t a[] = {0x42001000, 0x42002000, 0x42003000, 0x42004000};
+  TEST_ASSERT_TRUE(heaptop_calc_leak_add(g, 4, &n, a, 4, 256));
+  TEST_ASSERT_TRUE(heaptop_calc_leak_add(g, 4, &n, a, 4, 16));
+  TEST_ASSERT_EQUAL_size_t(1, n);
+  TEST_ASSERT_EQUAL_UINT32(2, g[0].count);
+  TEST_ASSERT_EQUAL_UINT32(272, g[0].bytes);
+  TEST_ASSERT_EQUAL_UINT32(16, g[0].min_size);
+  TEST_ASSERT_EQUAL_UINT32(256, g[0].max_size);
+  TEST_ASSERT_EQUAL_HEX32(0x42003000, g[0].pc[2]);
+}
+
+static void test_leak_add_separates_call_stacks_and_zero_fills(void)
+{
+  heaptop_leak_group_t g[4];
+  size_t n = 0;
+  const uintptr_t a[] = {0x42001000, 0x42002000};
+  const uintptr_t b[] = {0x42001000, 0x42009000};
+  TEST_ASSERT_TRUE(heaptop_calc_leak_add(g, 4, &n, a, 2, 8));
+  TEST_ASSERT_TRUE(heaptop_calc_leak_add(g, 4, &n, b, 2, 8));
+  TEST_ASSERT_EQUAL_size_t(2, n);
+  TEST_ASSERT_EQUAL_HEX32(0, g[0].pc[2]);
+  TEST_ASSERT_EQUAL_HEX32(0, g[1].pc[3]);
+}
+
+static void test_leak_add_reports_full_table(void)
+{
+  heaptop_leak_group_t g[1];
+  size_t n = 0;
+  const uintptr_t a[] = {1};
+  const uintptr_t b[] = {2};
+  TEST_ASSERT_TRUE(heaptop_calc_leak_add(g, 1, &n, a, 1, 8));
+  TEST_ASSERT_FALSE(heaptop_calc_leak_add(g, 1, &n, b, 1, 8));
+  TEST_ASSERT_TRUE(heaptop_calc_leak_add(g, 1, &n, a, 1, 8));
+  TEST_ASSERT_EQUAL_size_t(1, n);
+  TEST_ASSERT_EQUAL_UINT32(2, g[0].count);
+}
+
+static void test_leak_sort_by_bytes_descending(void)
+{
+  heaptop_leak_group_t g[3];
+  memset(g, 0, sizeof(g));
+  g[0].bytes = 10;
+  g[1].bytes = 300;
+  g[2].bytes = 20;
+  heaptop_calc_leak_sort(g, 3);
+  TEST_ASSERT_EQUAL_UINT32(300, g[0].bytes);
+  TEST_ASSERT_EQUAL_UINT32(20, g[1].bytes);
+  TEST_ASSERT_EQUAL_UINT32(10, g[2].bytes);
+}
+
+static void test_leak_suspect_steady_growth(void)
+{
+  const uint32_t v[] = {100, 200, 300, 400, 500, 600, 700, 800, 900};
+  int32_t growth = 0;
+  TEST_ASSERT_TRUE(heaptop_calc_leak_suspect(v, 9, 500, &growth));
+  TEST_ASSERT_EQUAL_INT32(800, growth);
+}
+
+static void test_leak_suspect_needs_enough_samples_and_growth(void)
+{
+  const uint32_t v[] = {100, 2000, 4000, 6000, 8000, 9000, 9500, 9900, 10000};
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 5, 500, NULL));
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 20000, NULL));
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 0, NULL));
+}
+
+static void test_leak_suspect_ignores_dip_below_start(void)
+{
+  const uint32_t v[] = {500, 400, 600, 800, 1000, 1200, 1300, 1400, 1500};
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 500, NULL));
+}
+
+static void test_leak_suspect_ignores_memory_given_back(void)
+{
+  const uint32_t v[] = {100, 1000, 2000, 3000, 4000, 5000, 5000, 5000, 2000};
+  int32_t growth = 0;
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 1000, &growth));
+  TEST_ASSERT_EQUAL_INT32(1900, growth);
+}
+
+static void test_growth_track_reuses_and_claims_slots(void)
+{
+  heaptop_growth_slot_t slots[2];
+  uint32_t mem[2 * 4];
+  heaptop_growth_t g;
+  heaptop_growth_init(&g, slots, 2, mem, 4);
+  heaptop_ring_t *a = heaptop_growth_track(&g, 0xA, 1);
+  heaptop_ring_t *b = heaptop_growth_track(&g, 0xB, 1);
+  TEST_ASSERT_NOT_NULL(a);
+  TEST_ASSERT_NOT_NULL(b);
+  TEST_ASSERT_TRUE(a != b);
+  TEST_ASSERT_EQUAL_PTR(a, heaptop_growth_track(&g, 0xA, 2));
+  TEST_ASSERT_NULL(heaptop_growth_track(&g, 0xC, 2));
+}
+
+static void test_growth_track_evicts_task_not_seen_last_sample(void)
+{
+  heaptop_growth_slot_t slots[2];
+  uint32_t mem[2 * 4];
+  heaptop_growth_t g;
+  heaptop_growth_init(&g, slots, 2, mem, 4);
+  heaptop_ring_push(heaptop_growth_track(&g, 0xA, 1), 111);
+  heaptop_growth_track(&g, 0xB, 1);
+  heaptop_growth_track(&g, 0xB, 2);
+  heaptop_ring_t *c = heaptop_growth_track(&g, 0xC, 3);
+  TEST_ASSERT_NOT_NULL(c);
+  TEST_ASSERT_EQUAL_UINT16(0, c->count);
+}
+
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_leak_add_groups_same_call_stack);
+  RUN_TEST(test_leak_add_separates_call_stacks_and_zero_fills);
+  RUN_TEST(test_leak_add_reports_full_table);
+  RUN_TEST(test_leak_sort_by_bytes_descending);
+  RUN_TEST(test_leak_suspect_steady_growth);
+  RUN_TEST(test_leak_suspect_needs_enough_samples_and_growth);
+  RUN_TEST(test_leak_suspect_ignores_dip_below_start);
+  RUN_TEST(test_leak_suspect_ignores_memory_given_back);
+  RUN_TEST(test_growth_track_reuses_and_claims_slots);
+  RUN_TEST(test_growth_track_evicts_task_not_seen_last_sample);
   RUN_TEST(test_bucket_boundaries);
   RUN_TEST(test_hist_add_counts_bytes_and_largest);
   RUN_TEST(test_fail_copy_is_newest_first);

@@ -130,6 +130,31 @@ typedef struct heaptop_fail
   bool isr;         /**< failed inside an interrupt */
 } heaptop_fail_t;
 
+/** Call-stack depth kept per leak group. */
+#define HEAPTOP_LEAK_DEPTH 4
+
+/** Surviving allocations that share one call stack. */
+typedef struct heaptop_leak_group
+{
+  uintptr_t pc[HEAPTOP_LEAK_DEPTH]; /**< callers, innermost first; 0 = none */
+  uint32_t count;
+  uint32_t bytes;
+  uint32_t min_size;
+  uint32_t max_size;
+} heaptop_leak_group_t;
+
+/** State of the leak trace (heap_trace in HEAP_TRACE_LEAKS mode). */
+typedef struct heaptop_leak_info
+{
+  bool available; /**< heap tracing compiled in */
+  bool running;
+  uint32_t duration_ms; /**< since start, or start to stop */
+  uint32_t records;     /**< surviving allocations in the buffer */
+  uint32_t capacity;    /**< record buffer size */
+  bool overflowed;      /**< buffer filled up: results are incomplete */
+  uint32_t ungrouped;   /**< records whose call site did not fit in the group table */
+} heaptop_leak_info_t;
+
 /** Samples of history carried in each snapshot for sparklines. */
 #define HEAPTOP_TREND_LEN 40
 

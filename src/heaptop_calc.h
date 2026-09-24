@@ -81,6 +81,62 @@ void heaptop_calc_hist_add(heaptop_frag_hist_t *h, uint32_t size);
 uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_t head, uint16_t count,
                                 heaptop_fail_t *out, uint16_t max);
 
+/** Minimum history before a task can be called a leak suspect. */
+#define HEAPTOP_LEAK_MIN_SAMPLES 8
+
+/**
+ * @brief Add one surviving allocation to the group with the same call stack.
+ *
+ * @param pc Callers, innermost first; only the first min(depth, HEAPTOP_LEAK_DEPTH) are compared.
+ * @return false when a new group was needed and the table is full.
+ */
+bool heaptop_calc_leak_add(heaptop_leak_group_t *groups, size_t cap, size_t *n, const uintptr_t *pc, size_t depth,
+                           uint32_t size);
+
+/** @brief Sort leak groups by bytes, largest first. */
+void heaptop_calc_leak_sort(heaptop_leak_group_t *groups, size_t n);
+
+/**
+ * @brief Does a heap history (oldest first) look like a leak?
+ *
+ * True when there are at least HEAPTOP_LEAK_MIN_SAMPLES samples, the value grew
+ * by at least @p threshold, never dropped below where it started, and is still
+ * within 10% of its peak. A @p threshold of 0 disables the check.
+ *
+ * @param[out] growth Last minus first sample (may be NULL).
+ */
+bool heaptop_calc_leak_suspect(const uint32_t *v, size_t n, uint32_t threshold, int32_t *growth);
+
+/** One task's heap history, keyed by task handle. */
+typedef struct heaptop_growth_slot
+{
+  uintptr_t handle; /* 0 = free */
+  uint32_t seen;    /* sample number of the last update */
+  heaptop_ring_t ring;
+} heaptop_growth_slot_t;
+
+/** Fixed table of per-task histories over caller memory. */
+typedef struct heaptop_growth
+{
+  heaptop_growth_slot_t *slots;
+  uint16_t n_slots;
+  uint32_t *mem; /* n_slots * window values */
+  uint16_t window;
+} heaptop_growth_t;
+
+void heaptop_growth_init(heaptop_growth_t *g, heaptop_growth_slot_t *slots, uint16_t n_slots, uint32_t *mem,
+                         uint16_t window);
+
+/**
+ * @brief History ring for @p handle at sample @p seq.
+ *
+ * Reuses the task's slot, else claims a free one or one whose task was not seen
+ * in the previous sample (its history restarts empty).
+ *
+ * @return NULL when every slot belongs to a task that is still alive.
+ */
+heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq);
+
 /**
  * @brief Order task indices by @p key without moving the tasks.
  *

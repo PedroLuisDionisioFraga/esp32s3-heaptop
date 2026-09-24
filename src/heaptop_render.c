@@ -429,3 +429,157 @@ void heaptop_render_allocs(heaptop_buf_t *b, const heaptop_snapshot_t *s, const 
                        f->func ? f->func : "?");
   }
 }
+
+void heaptop_render_leaks(heaptop_buf_t *b, const heaptop_leak_info_t *info, const heaptop_leak_group_t *groups,
+                          size_t n)
+{
+  if (b == NULL || info == NULL)
+    return;
+  if (!info->available)
+  {
+    heaptop_buf_printf(b, "leak trace off: enable CONFIG_HEAP_TRACING_STANDALONE (and CONFIG_HEAPTOP_LEAK_TRACE)\n");
+    return;
+  }
+  heaptop_buf_printf(b,
+                     "leak trace %s %lu.%lus: %lu surviving allocations (buffer %lu/%lu)\n",
+                     info->running ? "running for" : "stopped after",
+                     (unsigned long)(info->duration_ms / 1000u),
+                     (unsigned long)((info->duration_ms % 1000u) / 100u),
+                     (unsigned long)info->records,
+                     (unsigned long)info->records,
+                     (unsigned long)info->capacity);
+  if (info->overflowed)
+    heaptop_buf_printf(b,
+                       "WARNING: record buffer filled up, results are incomplete: raise CONFIG_HEAPTOP_LEAK_RECORDS\n");
+  if (groups == NULL || n == 0)
+  {
+    heaptop_buf_printf(b, "no surviving allocations\n");
+    return;
+  }
+
+  heaptop_buf_printf(b, "%9s %6s %10s  %s\n", "BYTES", "COUNT", "SIZE", "CALL STACK (innermost first)");
+  for (size_t i = 0; i < n; i++)
+  {
+    const heaptop_leak_group_t *g = &groups[i];
+    char bytes[12], size[24], stack[HEAPTOP_LEAK_DEPTH * 12 + 1];
+    heaptop_fmt_bytes(bytes, sizeof(bytes), g->bytes);
+    if (g->min_size == g->max_size)
+      snprintf(size, sizeof(size), "%lu", (unsigned long)g->min_size);
+    else
+      snprintf(size, sizeof(size), "%lu..%lu", (unsigned long)g->min_size, (unsigned long)g->max_size);
+    size_t used = 0;
+    stack[0] = '\0';
+    for (int k = 0; k < HEAPTOP_LEAK_DEPTH && g->pc[k] != 0; k++)
+    {
+      int w = snprintf(stack + used, sizeof(stack) - used, " 0x%08lx", (unsigned long)g->pc[k]);
+      if (w < 0 || (size_t)w >= sizeof(stack) - used)
+        break;
+      used += (size_t)w;
+    }
+    heaptop_buf_printf(b, "%9s %6lu %10s %s\n", bytes, (unsigned long)g->count, size, stack);
+  }
+  if (info->ungrouped)
+    heaptop_buf_printf(b, "(%lu more allocations from call sites beyond the table)\n", (unsigned long)info->ungrouped);
+  heaptop_buf_printf(b, "idf.py monitor decodes the 0x4... addresses into function and file:line\n");
+}
+
+static void _fmt_signed(char *out, size_t len, int64_t delta)
+{
+  if (delta == 0)
+  {
+    snprintf(out, len, "0");
+    return;
+  }
+  char mag[12];
+  const uint64_t abs = delta < 0 ? (uint64_t)(-delta) : (uint64_t)delta;
+  heaptop_fmt_bytes(mag, sizeof(mag), abs > UINT32_MAX ? UINT32_MAX : (uint32_t)abs);
+  snprintf(out, len, "%c%s", delta < 0 ? '-' : '+', mag);
+}
+
+static const heaptop_task_stats_t *_task_by_handle(const heaptop_snapshot_t *s, uintptr_t handle)
+{
+  for (uint16_t i = 0; i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    if (s->tasks[i].handle == handle)
+      return &s->tasks[i];
+  }
+  return NULL;
+}
+
+static void _diff_row(heaptop_buf_t *b, const char *name, const char *tag, const char *before, const char *now,
+                      int64_t delta)
+{
+  char label[HEAPTOP_TASK_NAME_LEN + 8], change[16];
+  snprintf(label, sizeof(label), "%s%s", name, tag);
+  _fmt_signed(change, sizeof(change), delta);
+  heaptop_buf_printf(b, "%-23s %11s %10s %10s\n", label, before, now, change);
+}
+
+void heaptop_render_diff(heaptop_buf_t *b, const heaptop_snapshot_t *before, const heaptop_snapshot_t *now)
+{
+  if (b == NULL || before == NULL || now == NULL)
+    return;
+  if (before->seq == 0)
+  {
+    heaptop_buf_printf(b, "no mark set: run `ht mark` first, then `ht diff`\n");
+    return;
+  }
+  char elapsed[24];
+  heaptop_fmt_uptime(elapsed,
+                     sizeof(elapsed),
+                     now->uptime_us > before->uptime_us ? now->uptime_us - before->uptime_us : 0);
+  heaptop_buf_printf(b,
+                     "diff over %s (sample #%lu -> #%lu)\n",
+                     elapsed,
+                     (unsigned long)before->seq,
+                     (unsigned long)now->seq);
+
+  heaptop_buf_printf(b, "%-23s %11s %10s %10s\n", "REGION", "FREE BEFORE", "FREE NOW", "CHANGE");
+  for (int r = 0; r < HEAPTOP_REGION_COUNT; r++)
+  {
+    if (!before->region[r].present && !now->region[r].present)
+      continue;
+    char was[12], is[12];
+    heaptop_fmt_bytes(was, sizeof(was), before->region[r].free);
+    heaptop_fmt_bytes(is, sizeof(is), now->region[r].free);
+    _diff_row(b, s_region_names[r], "", was, is, (int64_t)now->region[r].free - (int64_t)before->region[r].free);
+  }
+
+  if (!(now->features & HEAPTOP_FEAT_TASK_HEAP))
+  {
+    heaptop_buf_printf(b, "per-task heap: enable CONFIG_HEAP_TASK_TRACKING\n");
+    return;
+  }
+  heaptop_buf_printf(b, "\n%-23s %11s %10s %10s\n", "TASK", "HEAP BEFORE", "HEAP NOW", "CHANGE");
+  bool any = false;
+  for (uint16_t i = 0; i < now->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    const heaptop_task_stats_t *t = &now->tasks[i];
+    const heaptop_task_stats_t *old = _task_by_handle(before, t->handle);
+    char was[12] = "-", is[12];
+    heaptop_fmt_bytes(is, sizeof(is), t->heap_cur);
+    if (old == NULL)
+    {
+      _diff_row(b, t->name, " (new)", was, is, (int64_t)t->heap_cur);
+      any = true;
+      continue;
+    }
+    if (old->heap_cur == t->heap_cur)
+      continue;
+    heaptop_fmt_bytes(was, sizeof(was), old->heap_cur);
+    _diff_row(b, t->name, "", was, is, (int64_t)t->heap_cur - (int64_t)old->heap_cur);
+    any = true;
+  }
+  for (uint16_t i = 0; i < before->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    const heaptop_task_stats_t *old = &before->tasks[i];
+    if (_task_by_handle(now, old->handle) != NULL)
+      continue;
+    char was[12];
+    heaptop_fmt_bytes(was, sizeof(was), old->heap_cur);
+    _diff_row(b, old->name, " (gone)", was, "-", -(int64_t)old->heap_cur);
+    any = true;
+  }
+  if (!any)
+    heaptop_buf_printf(b, "no per-task heap changes\n");
+}

@@ -20,7 +20,9 @@
 #ifndef HEAPTOP_H
 #define HEAPTOP_H
 
+#include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "esp_err.h"
 #include "heaptop_types.h"
@@ -73,6 +75,42 @@ esp_err_t heaptop_deinit(void);
  * @return ESP_OK, ESP_ERR_INVALID_ARG for NULL, ESP_ERR_INVALID_STATE if not initialised.
  */
 esp_err_t heaptop_get_snapshot(heaptop_snapshot_t *out);
+
+/**
+ * @brief Start capturing allocations that are not freed (heap_trace, HEAP_TRACE_LEAKS).
+ *
+ * The first call takes CONFIG_HEAPTOP_LEAK_RECORDS trace records of internal RAM
+ * and keeps them until reboot. heaptop owns heap_trace while a capture runs.
+ *
+ * @return ESP_OK; ESP_ERR_INVALID_STATE if already running or heaptop is not
+ *         initialised; ESP_ERR_NOT_SUPPORTED without CONFIG_HEAPTOP_LEAK_TRACE;
+ *         ESP_ERR_NO_MEM for the record buffer.
+ */
+esp_err_t heaptop_leaks_start(void);
+
+/** @brief Stop the capture; its records stay available to the report. */
+esp_err_t heaptop_leaks_stop(void);
+
+/**
+ * @brief Print the capture: surviving allocations grouped by call stack, largest first.
+ *
+ * Works while running (a live view) or after stop. Call-stack addresses are
+ * decoded to file:line by idf.py monitor.
+ *
+ * @param out NULL for stdout.
+ * @param max_groups Rows to print.
+ */
+esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups);
+
+/** @brief Remember the latest snapshot as the baseline for heaptop_diff(). */
+esp_err_t heaptop_mark(void);
+
+/**
+ * @brief Print what changed since heaptop_mark(): region free bytes and per-task heap.
+ *
+ * @param out NULL for stdout.
+ */
+esp_err_t heaptop_diff(FILE *out);
 
 /**
  * @brief Register the `ht` console command. Call after esp_console_init().

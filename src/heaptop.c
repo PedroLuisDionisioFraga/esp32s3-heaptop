@@ -17,8 +17,10 @@
 #include "freertos/task.h"
 #include "heaptop_calc.h"
 #include "heaptop_priv.h"
+#include "heaptop_render.h"
 
 #define HEAPTOP_MIN_PERIOD_MS   100
+#define HEAPTOP_DIFF_TEXT_BYTES 4096
 #define HEAPTOP_EXIT_POLL_MS    20
 #define HEAPTOP_EXIT_POLL_TRIES 100
 
@@ -42,6 +44,7 @@ typedef struct heaptop_priv
 
   /* --- Shared with readers, guarded by lock. --- */
   heaptop_snapshot_t *latest;
+  heaptop_snapshot_t *mark; /* baseline for heaptop_diff(); seq 0 = none */
 
   /* --- Cross-task words: written whole by one task, read by another. --- */
   volatile bool running;      /* cleared by deinit */
@@ -115,8 +118,10 @@ static void _free_buffers(void)
   heaptop_tasks_deinit();
   heap_caps_free(s_priv.work);
   heap_caps_free(s_priv.latest);
+  heap_caps_free(s_priv.mark);
   s_priv.work = NULL;
   s_priv.latest = NULL;
+  s_priv.mark = NULL;
   if (s_priv.wake)
     vSemaphoreDelete(s_priv.wake);
   if (s_priv.lock)
@@ -149,7 +154,8 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
   s_priv.wake = xSemaphoreCreateBinary();
   s_priv.work = heap_caps_calloc(1, sizeof(heaptop_snapshot_t), caps);
   s_priv.latest = heap_caps_calloc(1, sizeof(heaptop_snapshot_t), caps);
-  if (!s_priv.lock || !s_priv.wake || !s_priv.work || !s_priv.latest)
+  s_priv.mark = heap_caps_calloc(1, sizeof(heaptop_snapshot_t), caps);
+  if (!s_priv.lock || !s_priv.wake || !s_priv.work || !s_priv.latest || !s_priv.mark)
   {
     ESP_LOGE(TAG, "no memory for snapshot buffers");
     goto fail;
@@ -162,6 +168,7 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
   }
 
   heaptop_hooks_init();
+  heaptop_leaks_init();
 
   s_priv.running = true;
   TaskHandle_t task = NULL;
@@ -202,6 +209,7 @@ esp_err_t heaptop_deinit(void)
     return ESP_ERR_TIMEOUT;
   }
 
+  heaptop_leaks_shutdown();
   _free_buffers();
   ESP_LOGI(TAG, "stopped");
   return ESP_OK;
@@ -217,5 +225,46 @@ esp_err_t heaptop_get_snapshot(heaptop_snapshot_t *out)
   xSemaphoreTake(s_priv.lock, portMAX_DELAY);
   memcpy(out, s_priv.latest, sizeof(*out));
   xSemaphoreGive(s_priv.lock);
+  return ESP_OK;
+}
+
+esp_err_t heaptop_mark(void)
+{
+  if (!s_priv.running)
+    return ESP_ERR_INVALID_STATE;
+  xSemaphoreTake(s_priv.lock, portMAX_DELAY);
+  memcpy(s_priv.mark, s_priv.latest, sizeof(*s_priv.mark));
+  xSemaphoreGive(s_priv.lock);
+  return ESP_OK;
+}
+
+esp_err_t heaptop_diff(FILE *out)
+{
+  if (!s_priv.running)
+    return ESP_ERR_INVALID_STATE;
+  if (out == NULL)
+    out = stdout;
+
+  /* now, before and the text in one temporary block, freed before returning. */
+  const size_t snap = sizeof(heaptop_snapshot_t);
+  uint8_t *mem = heap_caps_malloc(2 * snap + HEAPTOP_DIFF_TEXT_BYTES, heaptop_buffer_caps());
+  ESP_RETURN_ON_FALSE(mem != NULL, ESP_ERR_NO_MEM, TAG, "no memory for the diff");
+  heaptop_snapshot_t *now = (heaptop_snapshot_t *)mem;
+  heaptop_snapshot_t *before = (heaptop_snapshot_t *)(mem + snap);
+  char *text = (char *)(mem + 2 * snap);
+
+  xSemaphoreTake(s_priv.lock, portMAX_DELAY);
+  memcpy(now, s_priv.latest, snap);
+  memcpy(before, s_priv.mark, snap);
+  xSemaphoreGive(s_priv.lock);
+
+  heaptop_buf_t b;
+  heaptop_buf_init(&b, text, HEAPTOP_DIFF_TEXT_BYTES);
+  heaptop_render_diff(&b, before, now);
+  fwrite(b.p, 1, b.len, out);
+  if (b.truncated)
+    fputs("... (output truncated)\n", out);
+  fflush(out);
+  heap_caps_free(mem);
   return ESP_OK;
 }

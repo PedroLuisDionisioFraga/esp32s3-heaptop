@@ -43,6 +43,12 @@ void heaptop_hooks_sample(heaptop_snapshot_t *s);
 /** Copy the logged allocation failures, newest first. Any task. */
 uint16_t heaptop_hooks_failures(heaptop_fail_t *out, uint16_t max);
 
+/** Create the leak-capture lock (once). */
+void heaptop_leaks_init(void);
+
+/** Stop a running leak capture; the record buffer is kept. */
+void heaptop_leaks_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

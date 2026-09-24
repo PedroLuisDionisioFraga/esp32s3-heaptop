@@ -66,6 +66,13 @@ void heaptop_render_frag(heaptop_buf_t *b, const char *name, const heaptop_frag_
  */
 void heaptop_render_allocs(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_fail_t *fails, size_t n);
 
+/** @brief Leak trace status and surviving allocations grouped by call stack. */
+void heaptop_render_leaks(heaptop_buf_t *b, const heaptop_leak_info_t *info, const heaptop_leak_group_t *groups,
+                          size_t n);
+
+/** @brief What changed between two snapshots: regions and per-task heap. */
+void heaptop_render_diff(heaptop_buf_t *b, const heaptop_snapshot_t *before, const heaptop_snapshot_t *now);
+
 /** @brief Region table: total, free, min free, largest block, fragmentation, blocks. */
 void heaptop_render_heap(heaptop_buf_t *b, const heaptop_snapshot_t *s);
 

@@ -174,6 +174,83 @@ static int _cmd_allocs(int argc, char **argv)
   return 0;
 }
 
+#define HEAPTOP_LEAK_ROWS_DEFAULT 10
+
+static int _leaks_err(const char *what, esp_err_t err)
+{
+  if (err == ESP_ERR_NOT_SUPPORTED)
+    printf("ht leaks: heap tracing is off: enable CONFIG_HEAP_TRACING_STANDALONE\n");
+  else if (err == ESP_ERR_INVALID_STATE)
+    printf("ht leaks %s: %s\n", what, strcmp(what, "start") == 0 ? "already running" : "not running");
+  else
+    printf("ht leaks %s: %s\n", what, esp_err_to_name(err));
+  return 1;
+}
+
+static int _cmd_leaks(int argc, char **argv)
+{
+  const char *action = argc > 1 ? argv[1] : "report";
+  if (strcmp(action, "start") == 0)
+  {
+    esp_err_t err = heaptop_leaks_start();
+    if (err != ESP_OK)
+      return _leaks_err("start", err);
+    printf("leak capture running: exercise the code, then `ht leaks stop` and `ht leaks report`\n");
+    return 0;
+  }
+  if (strcmp(action, "stop") == 0)
+  {
+    esp_err_t err = heaptop_leaks_stop();
+    if (err != ESP_OK)
+      return _leaks_err("stop", err);
+    return heaptop_leaks_report(stdout, HEAPTOP_LEAK_ROWS_DEFAULT) == ESP_OK ? 0 : 1;
+  }
+  if (strcmp(action, "status") == 0)
+    return heaptop_leaks_report(stdout, 0) == ESP_OK ? 0 : 1;
+  if (strcmp(action, "report") == 0)
+  {
+    unsigned long rows = HEAPTOP_LEAK_ROWS_DEFAULT;
+    if (argc > 2)
+    {
+      char *end = NULL;
+      rows = strtoul(argv[2], &end, 10);
+      if (end == argv[2] || *end != '\0' || rows == 0)
+      {
+        printf("ht leaks report: rows must be a positive number\n");
+        return 1;
+      }
+    }
+    return heaptop_leaks_report(stdout, rows) == ESP_OK ? 0 : 1;
+  }
+  printf("ht leaks: unknown action '%s' (use start, stop, report [rows] or status)\n", action);
+  return 1;
+}
+
+static int _cmd_mark(int argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+  if (!_load_snapshot())
+    return 1;
+  if (heaptop_mark() != ESP_OK)
+    return 1;
+  printf("mark set at sample #%lu; run `ht diff` later to see what changed\n", (unsigned long)s_con.snap->seq);
+  return 0;
+}
+
+static int _cmd_diff(int argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+  esp_err_t err = heaptop_diff(stdout);
+  if (err != ESP_OK)
+  {
+    printf("ht diff: %s\n", esp_err_to_name(err));
+    return 1;
+  }
+  return 0;
+}
+
 /* Wait up to @p ms for one byte on stdin; -1 on timeout. The wait doubles as the refresh tick. */
 static int _wait_key(uint32_t ms)
 {
@@ -296,6 +373,9 @@ static const heaptop_sub_t s_subs[] = {
   {"top", "[refresh_ms]", "Live view; q quits, c/m/s/n sort, +/- refresh, p pause", _cmd_top},
   {"frag", "[internal|dma|psram]", "Free-block size histogram of a region", _cmd_frag},
   {"allocs", "", "Allocation rates and the last allocation failures", _cmd_allocs},
+  {"leaks", "start|stop|report [rows]|status", "Capture allocations never freed, grouped by call stack", _cmd_leaks},
+  {"mark", "", "Remember the current state as a baseline", _cmd_mark},
+  {"diff", "", "What changed since `ht mark`: region free bytes and task heap", _cmd_diff},
   {"heap", "", "Heap regions: free, min free, largest block, fragmentation", _cmd_heap},
   {"tasks", "[cpu|heap|stack|name]", "Tasks: state, CPU %, stack high-water mark, heap held", _cmd_tasks},
 };
@@ -304,7 +384,7 @@ static void _usage(void)
 {
   printf("usage: ht <subcommand> [args]\n");
   for (size_t i = 0; i < sizeof(s_subs) / sizeof(s_subs[0]); i++)
-    printf("  ht %-6s %-22s %s\n", s_subs[i].name, s_subs[i].args, s_subs[i].help);
+    printf("  ht %-6s %-32s %s\n", s_subs[i].name, s_subs[i].args, s_subs[i].help);
 }
 
 static int _cmd_ht(int argc, char **argv)

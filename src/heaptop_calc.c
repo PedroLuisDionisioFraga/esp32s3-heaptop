@@ -1,6 +1,7 @@
 #include "heaptop_calc.h"
 
 #include <ctype.h>
+#include <string.h>
 
 void heaptop_ring_init(heaptop_ring_t *r, uint32_t *buf, uint16_t cap)
 {
@@ -61,6 +62,126 @@ uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_
   const uint16_t n = count < max ? count : max;
   for (uint16_t i = 0; i < n; i++) out[i] = buf[(head + cap - 1u - i) % cap];
   return n;
+}
+
+bool heaptop_calc_leak_add(heaptop_leak_group_t *groups, size_t cap, size_t *n, const uintptr_t *pc, size_t depth,
+                           uint32_t size)
+{
+  if (groups == NULL || n == NULL || pc == NULL)
+    return false;
+  uintptr_t key[HEAPTOP_LEAK_DEPTH] = {0};
+  const size_t d = depth < HEAPTOP_LEAK_DEPTH ? depth : HEAPTOP_LEAK_DEPTH;
+  for (size_t k = 0; k < d; k++) key[k] = pc[k];
+
+  for (size_t i = 0; i < *n; i++)
+  {
+    heaptop_leak_group_t *g = &groups[i];
+    if (memcmp(g->pc, key, sizeof(key)) != 0)
+      continue;
+    g->count++;
+    g->bytes += size;
+    if (size < g->min_size)
+      g->min_size = size;
+    if (size > g->max_size)
+      g->max_size = size;
+    return true;
+  }
+  if (*n >= cap)
+    return false;
+  heaptop_leak_group_t *g = &groups[(*n)++];
+  memcpy(g->pc, key, sizeof(key));
+  g->count = 1;
+  g->bytes = size;
+  g->min_size = size;
+  g->max_size = size;
+  return true;
+}
+
+void heaptop_calc_leak_sort(heaptop_leak_group_t *groups, size_t n)
+{
+  if (groups == NULL)
+    return;
+  for (size_t i = 1; i < n; i++)
+  {
+    heaptop_leak_group_t cur = groups[i];
+    size_t j = i;
+    while (j > 0 && groups[j - 1].bytes < cur.bytes)
+    {
+      groups[j] = groups[j - 1];
+      j--;
+    }
+    groups[j] = cur;
+  }
+}
+
+bool heaptop_calc_leak_suspect(const uint32_t *v, size_t n, uint32_t threshold, int32_t *growth)
+{
+  if (v == NULL || n == 0)
+    return false;
+  int64_t g = (int64_t)v[n - 1] - (int64_t)v[0];
+  if (g > INT32_MAX)
+    g = INT32_MAX;
+  if (g < INT32_MIN)
+    g = INT32_MIN;
+  if (growth)
+    *growth = (int32_t)g;
+  if (n < HEAPTOP_LEAK_MIN_SAMPLES || threshold == 0 || g < (int64_t)threshold)
+    return false;
+
+  uint32_t peak = v[0];
+  for (size_t i = 0; i < n; i++)
+  {
+    if (v[i] < v[0])
+      return false; /* gave memory back below where it started */
+    if (v[i] > peak)
+      peak = v[i];
+  }
+  /* Still holding at least 90% of its peak: nothing was released. */
+  return (uint64_t)v[n - 1] * 10u >= (uint64_t)peak * 9u;
+}
+
+void heaptop_growth_init(heaptop_growth_t *g, heaptop_growth_slot_t *slots, uint16_t n_slots, uint32_t *mem,
+                         uint16_t window)
+{
+  if (g == NULL)
+    return;
+  g->slots = slots;
+  g->n_slots = (slots && mem) ? n_slots : 0;
+  g->mem = mem;
+  g->window = window;
+  for (uint16_t i = 0; i < g->n_slots; i++)
+  {
+    slots[i].handle = 0;
+    slots[i].seen = 0;
+    heaptop_ring_init(&slots[i].ring, mem + (size_t)i * window, window);
+  }
+}
+
+heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq)
+{
+  if (g == NULL || handle == 0)
+    return NULL;
+  for (uint16_t i = 0; i < g->n_slots; i++)
+  {
+    if (g->slots[i].handle == handle)
+    {
+      g->slots[i].seen = seq;
+      return &g->slots[i].ring;
+    }
+  }
+  for (uint16_t i = 0; i < g->n_slots; i++)
+  {
+    heaptop_growth_slot_t *s = &g->slots[i];
+    /* Free, or its task was missing from the previous sample: the task is gone. */
+    if (s->handle == 0 || s->seen + 1u < seq)
+    {
+      s->handle = handle;
+      s->seen = seq;
+      heaptop_ring_init(&s->ring, g->mem + (size_t)i * g->window, g->window);
+      return &s->ring;
+    }
+  }
+  return NULL;
 }
 
 uint16_t heaptop_calc_frag_pct10(uint32_t free, uint32_t largest)
