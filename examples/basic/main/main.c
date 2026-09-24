@@ -17,9 +17,8 @@
 #include "nvs_flash.h"
 #include "soc/soc_caps.h"
 #include "cmd_system.h"
-#include "cmd_wifi.h"
-#include "cmd_nvs.h"
 #include "console_settings.h"
+#include "heaptop.h"
 
 /*
  * We warn if a secondary serial console is enabled. A secondary serial console is always output-only and
@@ -32,7 +31,7 @@
 #endif
 #endif
 
-static const char* TAG = "example";
+static const char* TAG = "heaptop_basic";
 #define PROMPT_STR CONFIG_IDF_TARGET
 
 /* Console command history can be stored to and loaded from a file.
@@ -73,6 +72,8 @@ static void initialize_nvs(void)
 
 void app_main(void)
 {
+    ESP_ERROR_CHECK(heaptop_init(NULL));
+
     initialize_nvs();
 
 #if CONFIG_CONSOLE_STORE_HISTORY
@@ -102,13 +103,9 @@ void app_main(void)
 #if SOC_DEEP_SLEEP_SUPPORTED
     register_system_deep_sleep();
 #endif
-#if (CONFIG_ESP_WIFI_ENABLED || CONFIG_ESP_HOST_WIFI_ENABLED)
-    register_wifi();
-#endif
-    register_nvs();
 
     printf("\n"
-           "This is an example of ESP-IDF console component.\n"
+           "Heaptop basic example.\n"
            "Type 'help' to get the list of commands.\n"
            "Use UP/DOWN arrows to navigate through command history.\n"
            "Press TAB when typing command name to auto-complete.\n"

@@ -1,0 +1,35 @@
+name: "heaptop"
+version: "0.1.0"
+license: "MIT"
+description: "Heaptop is an htop-like heap and task monitor for ESP-IDF over the serial console: live fragmentation, leak capture grouped by call stack, per-task heap, stack high-water mark and CPU usage, allocation rate and failure tracking, threshold alerts and a JSON Lines stream."
+url: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop"
+repository: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop"
+documentation: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop/tree/main/README.md"
+issues: "https://github.com/PedroLuisDionisioFraga/esp32-heaptop/issues"
+# Only the chips CI builds for; esp32s3 is the hardware-tested target.
+targets:
+  - esp32
+  - esp32s3
+  - esp32c3
+  - esp32c6
+tags:
+  - esp32
+  - heap
+  - memory
+  - leak
+  - fragmentation
+  - freertos
+  - monitor
+  - console
+examples:
+  - path: examples/basic
+files:
+  exclude:
+    - "test/**/*"
+    - "examples/basic/pytest_*.py"
+    - ".devcontainer/**/*"
+    - ".vscode/**/*"
+    - ".claude/**/*"
+    - ".superpowers/**/*"
+dependencies:
+  idf: ">=6.0.0"
