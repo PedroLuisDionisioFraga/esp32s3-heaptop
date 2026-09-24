@@ -1,0 +1,2 @@
+# Headless mode: JSON Lines on stdout from boot.
+CONFIG_HEAPTOP_STREAM_AT_BOOT=y

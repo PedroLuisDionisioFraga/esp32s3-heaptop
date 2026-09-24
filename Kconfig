@@ -1,0 +1,157 @@
+menu "Heaptop"
+
+    # uxTaskGetSystemState() exists only with the FreeRTOS trace facility
+    # (off by default in IDF); it costs a few bytes per task.
+    config HEAPTOP_SELECT_TRACE_FACILITY
+        bool
+        default y
+        select FREERTOS_USE_TRACE_FACILITY
+
+    config HEAPTOP_SAMPLE_PERIOD_MS
+        int "Sampling period (ms)"
+        range 100 60000
+        default 1000
+        help
+            How often the sampler task takes a heap and task snapshot.
+            heap_caps_get_info() walks every heap block with a spinlock held,
+            so very short periods add interrupt latency.
+
+    config HEAPTOP_HISTORY_LEN
+        int "History length (samples)"
+        range 20 1024
+        default 120 if SPIRAM
+        default 30
+        help
+            Samples of per-task heap history used for leak suspicion; a task
+            needs at least 20 before it can be flagged. Costs
+            HEAPTOP_MAX_TASKS x 4 bytes per sample (15 KB for 32 tasks x 120),
+            which is why chips without PSRAM default to 30 samples.
+
+    config HEAPTOP_MAX_TASKS
+        int "Maximum tasks tracked"
+        range 8 128
+        default 32
+        help
+            Size of the preallocated task tables. Tasks beyond this are not shown.
+
+    config HEAPTOP_TASK_STACK
+        int "Sampler task stack size (bytes)"
+        range 2048 16384
+        default 4096
+
+    config HEAPTOP_TASK_PRIO
+        int "Sampler task priority"
+        range 1 24
+        default 1
+        help
+            Keep it low so heaptop does not disturb the application it measures.
+            Rates use the real elapsed time, so late samples stay accurate.
+
+    config HEAPTOP_TASK_CORE
+        int "Sampler task core (-1 = no affinity)"
+        range -1 0 if FREERTOS_UNICORE
+        range -1 1
+        default -1
+
+    config HEAPTOP_ALLOC_HOOKS
+        bool "Count allocations with heap hooks"
+        depends on HEAP_USE_HOOKS
+        default y
+        help
+            Defines esp_heap_trace_alloc_hook() and esp_heap_trace_free_hook() to
+            count allocations and frees. The definitions are weak: if the
+            application defines these hooks too, its versions win silently and
+            heaptop's allocation rates stay at 0, so disable this option then.
+
+    config HEAPTOP_FAILED_ALLOC_CALLBACK
+        bool "Register the failed-allocation callback"
+        default y
+        help
+            Takes the single heap_caps_register_failed_alloc_callback() slot to
+            record allocation failures. Disable if the application uses it.
+
+    config HEAPTOP_FAIL_RING_LEN
+        int "Allocation failures kept"
+        depends on HEAPTOP_FAILED_ALLOC_CALLBACK
+        range 1 64
+        default 8
+
+    config HEAPTOP_TASK_HEAP
+        bool "Per-task heap usage (task tracking)"
+        depends on HEAP_TASK_TRACKING
+        default y
+
+    config HEAPTOP_LEAK_TRACE
+        bool "Leak capture (heap tracing)"
+        depends on HEAP_TRACING_STANDALONE
+        default y
+
+    config HEAPTOP_LEAK_RECORDS
+        int "Leak trace records"
+        depends on HEAPTOP_LEAK_TRACE
+        range 16 4096
+        default 256
+        help
+            Record buffer for heap_trace. It stays in internal RAM: records in
+            PSRAM would miss allocations made from ISRs.
+
+    config HEAPTOP_BUFFERS_IN_PSRAM
+        bool "Place history buffers in PSRAM"
+        depends on SPIRAM
+        default y
+
+    config HEAPTOP_STREAM_AT_BOOT
+        bool "Start the JSON Lines stream at boot"
+        default n
+        help
+            Emits heaptop samples on stdout without a console, for headless
+            devices read by a host script.
+
+    menu "Alert thresholds"
+
+        config HEAPTOP_ALERT_DRAM_FREE_MIN
+            int "Internal RAM free floor (bytes, 0 = off)"
+            range 0 16777216
+            default 20480
+
+        config HEAPTOP_ALERT_DRAM_LARGEST_MIN
+            int "Internal RAM largest free block floor (bytes, 0 = off)"
+            range 0 16777216
+            default 8192
+
+        config HEAPTOP_ALERT_FRAG_PCT_MAX
+            int "Internal RAM fragmentation ceiling (%, 0 = off)"
+            range 0 100
+            default 80
+
+        config HEAPTOP_ALERT_PSRAM_FREE_MIN
+            int "PSRAM free floor (bytes, 0 = off)"
+            range 0 134217728
+            default 65536
+
+        config HEAPTOP_ALERT_STACK_HWM_MIN
+            int "Task stack high-water mark floor (bytes, 0 = off)"
+            range 0 65536
+            default 256
+            help
+                IDF's own ipc tasks normally keep only 500-600 bytes free, so a
+                floor near 512 would keep this alert on all the time.
+
+        config HEAPTOP_ALERT_TASK_GROWTH
+            int "Task heap growth over the history window (bytes, 0 = off)"
+            range 0 16777216
+            default 4096
+            help
+                A task is a leak suspect when its heap grew by at least this much
+                across the history window in several separate steps, grew in
+                every third of the window, never dropped below where it started,
+                and still holds nearly all of it.
+
+        config HEAPTOP_ALERT_HYSTERESIS_PCT
+            int "Hysteresis before an alert clears (%)"
+            range 0 50
+            default 10
+
+    endmenu
+
+endmenu
