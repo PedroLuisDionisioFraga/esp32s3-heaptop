@@ -12,7 +12,8 @@ import pytest
 from pytest_embedded import Dut
 from pytest_embedded_idf.utils import idf_parametrize
 
-JSON_LINE = re.compile(rb'(\{"ht":1,[^\r\n]*\})')
+# Anchored on the line end: a line still arriving can end in an inner '}'.
+JSON_LINE = re.compile(rb'(\{"ht":1,[^\r\n]*\})\r?\n')
 
 
 def _ready(dut: Dut) -> None:
@@ -71,6 +72,24 @@ def test_heaptop_flags_leaking_task(dut: Dut) -> None:
     dut.expect(re.compile(rb'stress_leak[^\r\n]*LEAK\?'))
     _run(dut, 'stress stop')
     dut.expect('stopped; freed')
+
+
+@pytest.mark.generic
+@idf_parametrize('target', ['esp32s3'], indirect=['target'])
+def test_stress_stop_survives_repeated_cycles(dut: Dut) -> None:
+    # Ending workers while their blocks are freed used to reboot the board:
+    # with task tracking, the idle task could block while cleaning up a task
+    # that deleted itself (assert in prvSelectHighestPriorityTaskSMP).
+    _ready(dut)
+    for _ in range(10):
+        _run(dut, 'stress frag 150')
+        _run(dut, 'stress leak 128 20')
+        _run(dut, 'stress cpu 30')
+        time.sleep(1.5)
+        _run(dut, 'stress stop')
+        dut.expect(re.compile(rb'stopped; freed \d+ leaked and 150 fragmentation blocks'), timeout=5)
+    _run(dut, 'ht tasks')
+    dut.expect('heaptop')
 
 
 @pytest.mark.generic
