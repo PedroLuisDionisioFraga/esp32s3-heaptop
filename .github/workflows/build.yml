@@ -19,6 +19,17 @@ jobs:
         idf_target: ["esp32", "esp32s3", "esp32c3", "esp32c6"]
         # One entry per directory under examples/.
         example: ["basic"]
+        config: ["default"]
+        # Optional code paths, built once: every IDF data source off, and the boot stream on.
+        include:
+          - idf_ver: "release-v6.0"
+            idf_target: "esp32s3"
+            example: "basic"
+            config: "minimal"
+          - idf_ver: "release-v6.0"
+            idf_target: "esp32s3"
+            example: "basic"
+            config: "stream_at_boot"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,9 +38,12 @@ jobs:
           # named after the component, or IDF's requirement resolution fails.
           path: heaptop
 
-      - name: Build ${{ matrix.example }} example (IDF ${{ matrix.idf_ver }}, ${{ matrix.idf_target }})
+      - name: Build ${{ matrix.example }} (${{ matrix.config }}, IDF ${{ matrix.idf_ver }}, ${{ matrix.idf_target }})
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: ${{ matrix.idf_ver }}
           target: ${{ matrix.idf_target }}
           path: heaptop/examples/${{ matrix.example }}
+          command: >-
+            ${{ matrix.config == 'default' && 'idf.py build' ||
+            format('idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.{0}" build', matrix.config) }}
