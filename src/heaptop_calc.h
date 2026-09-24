@@ -83,6 +83,8 @@ uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_
 
 /** Minimum history before a task can be called a leak suspect. */
 #define HEAPTOP_LEAK_MIN_SAMPLES 8
+/** Minimum separate increases in that history. */
+#define HEAPTOP_LEAK_MIN_RISES 3
 
 /**
  * @brief Add one surviving allocation to the group with the same call stack.
@@ -100,8 +102,9 @@ void heaptop_calc_leak_sort(heaptop_leak_group_t *groups, size_t n);
  * @brief Does a heap history (oldest first) look like a leak?
  *
  * True when there are at least HEAPTOP_LEAK_MIN_SAMPLES samples, the value grew
- * by at least @p threshold, never dropped below where it started, and is still
- * within 10% of its peak. A @p threshold of 0 disables the check.
+ * by at least @p threshold in at least HEAPTOP_LEAK_MIN_RISES separate steps,
+ * was still growing in the second half of the window, never dropped below where
+ * it started, and is within 10% of its peak. A @p threshold of 0 disables it.
  *
  * @param[out] growth Last minus first sample (may be NULL).
  */

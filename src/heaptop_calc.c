@@ -129,13 +129,20 @@ bool heaptop_calc_leak_suspect(const uint32_t *v, size_t n, uint32_t threshold, 
     return false;
 
   uint32_t peak = v[0];
+  size_t rises = 0;
   for (size_t i = 0; i < n; i++)
   {
     if (v[i] < v[0])
       return false; /* gave memory back below where it started */
     if (v[i] > peak)
       peak = v[i];
+    if (i > 0 && v[i] > v[i - 1])
+      rises++;
   }
+  /* One long-lived buffer, or start-up allocations that have stopped, are not leaks:
+   * a leak keeps rising in separate steps and is still rising in the second half. */
+  if (rises < HEAPTOP_LEAK_MIN_RISES || v[n - 1] <= v[n / 2])
+    return false;
   /* Still holding at least 90% of its peak: nothing was released. */
   return (uint64_t)v[n - 1] * 10u >= (uint64_t)peak * 9u;
 }

@@ -343,6 +343,28 @@ static void test_leak_suspect_ignores_memory_given_back(void)
   TEST_ASSERT_EQUAL_INT32(1900, growth);
 }
 
+static void test_leak_suspect_ignores_one_step_then_flat(void)
+{
+  /* A task that allocates one long-lived buffer (a driver, a worker's stack). */
+  const uint32_t v[] = {100, 5100, 5100, 5100, 5100, 5100, 5100, 5100, 5100};
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
+}
+
+static void test_leak_suspect_ignores_growth_that_stopped(void)
+{
+  /* Start-up allocations in a few steps, then stable. */
+  const uint32_t v[] = {100, 2000, 4000, 6000, 6000, 6000, 6000, 6000, 6000};
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
+}
+
+static void test_leak_suspect_catches_staircase_leak(void)
+{
+  const uint32_t v[] = {100, 100, 1100, 1100, 2100, 2100, 3100, 3100, 4100, 4100, 5100};
+  int32_t growth = 0;
+  TEST_ASSERT_TRUE(heaptop_calc_leak_suspect(v, 11, 4096, &growth));
+  TEST_ASSERT_EQUAL_INT32(5000, growth);
+}
+
 static void test_growth_track_reuses_and_claims_slots(void)
 {
   heaptop_growth_slot_t slots[2];
@@ -475,6 +497,9 @@ int main(void)
   RUN_TEST(test_leak_suspect_needs_enough_samples_and_growth);
   RUN_TEST(test_leak_suspect_ignores_dip_below_start);
   RUN_TEST(test_leak_suspect_ignores_memory_given_back);
+  RUN_TEST(test_leak_suspect_ignores_one_step_then_flat);
+  RUN_TEST(test_leak_suspect_ignores_growth_that_stopped);
+  RUN_TEST(test_leak_suspect_catches_staircase_leak);
   RUN_TEST(test_growth_track_reuses_and_claims_slots);
   RUN_TEST(test_growth_track_evicts_task_not_seen_last_sample);
   RUN_TEST(test_bucket_boundaries);
