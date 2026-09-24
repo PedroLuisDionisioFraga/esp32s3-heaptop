@@ -1,5 +1,12 @@
 menu "Heaptop"
 
+    # uxTaskGetSystemState() exists only with the FreeRTOS trace facility
+    # (off by default in IDF); it costs a few bytes per task.
+    config HEAPTOP_SELECT_TRACE_FACILITY
+        bool
+        default y
+        select FREERTOS_USE_TRACE_FACILITY
+
     config HEAPTOP_SAMPLE_PERIOD_MS
         int "Sampling period (ms)"
         range 100 60000
@@ -41,6 +48,7 @@ menu "Heaptop"
 
     config HEAPTOP_TASK_CORE
         int "Sampler task core (-1 = no affinity)"
+        range -1 0 if FREERTOS_UNICORE
         range -1 1
         default -1
 
@@ -50,8 +58,9 @@ menu "Heaptop"
         default y
         help
             Defines esp_heap_trace_alloc_hook() and esp_heap_trace_free_hook() to
-            count allocations and frees. Conflicts with an application that
-            defines these hooks itself.
+            count allocations and frees. The definitions are weak: if the
+            application defines these hooks too, its versions win silently and
+            heaptop's allocation rates stay at 0, so disable this option then.
 
     config HEAPTOP_FAILED_ALLOC_CALLBACK
         bool "Register the failed-allocation callback"
@@ -101,10 +110,12 @@ menu "Heaptop"
 
         config HEAPTOP_ALERT_DRAM_FREE_MIN
             int "Internal RAM free floor (bytes, 0 = off)"
+            range 0 16777216
             default 20480
 
         config HEAPTOP_ALERT_DRAM_LARGEST_MIN
             int "Internal RAM largest free block floor (bytes, 0 = off)"
+            range 0 16777216
             default 8192
 
         config HEAPTOP_ALERT_FRAG_PCT_MAX
@@ -114,18 +125,23 @@ menu "Heaptop"
 
         config HEAPTOP_ALERT_PSRAM_FREE_MIN
             int "PSRAM free floor (bytes, 0 = off)"
+            range 0 134217728
             default 65536
 
         config HEAPTOP_ALERT_STACK_HWM_MIN
             int "Task stack high-water mark floor (bytes, 0 = off)"
+            range 0 65536
             default 512
 
         config HEAPTOP_ALERT_TASK_GROWTH
             int "Task heap growth over the history window (bytes, 0 = off)"
+            range 0 16777216
             default 4096
             help
-                A task whose heap grew by more than this across the history
-                window, without ever dropping back, is flagged as a leak suspect.
+                A task is a leak suspect when its heap grew by at least this much
+                across the history window in several separate steps, kept growing
+                in the second half of the window, never dropped below where it
+                started, and still holds nearly all of it.
 
         config HEAPTOP_ALERT_HYSTERESIS_PCT
             int "Hysteresis before an alert clears (%)"

@@ -1,6 +1,10 @@
-# Every optional IDF data source off: heaptop must build and degrade to what is left.
+# Every optional IDF data source off, FreeRTOS at IDF defaults: heaptop must
+# build in a plain project and degrade to what is left.
 # CONFIG_HEAP_TASK_TRACKING is not set
 # CONFIG_HEAP_USE_HOOKS is not set
 CONFIG_HEAP_TRACING_OFF=y
 # CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is not set
+# CONFIG_FREERTOS_USE_TRACE_FACILITY is not set
+# CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS is not set
+# CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID is not set
 # CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK is not set
