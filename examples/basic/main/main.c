@@ -20,7 +20,6 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "soc/soc_caps.h"
-#include "stress_cmds.h"
 
 /*
  * We warn if a secondary serial console is enabled. A secondary serial console is always output-only and
@@ -105,7 +104,6 @@ void app_main(void)
   register_system_deep_sleep();
 #endif
   ESP_ERROR_CHECK(heaptop_console_register());
-  register_stress_commands();
 
   printf("\n"
          "Heaptop basic example.\n"
