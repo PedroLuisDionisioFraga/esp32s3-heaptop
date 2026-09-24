@@ -297,6 +297,17 @@ static void _region_line(heaptop_buf_t *b, const heaptop_snapshot_t *s, heaptop_
   }
 }
 
+static void _alloc_rates(heaptop_buf_t *b, const heaptop_snapshot_t *s)
+{
+  char bytes[12];
+  heaptop_fmt_bytes(bytes, sizeof(bytes), s->alloc.bytes_per_s);
+  heaptop_buf_printf(b,
+                     "allocs/s %u  frees/s %u  bytes/s %s",
+                     (unsigned)s->alloc.allocs_per_s,
+                     (unsigned)s->alloc.frees_per_s,
+                     bytes);
+}
+
 void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_top_view_t *view)
 {
   if (b == NULL || s == NULL || view == NULL)
@@ -323,6 +334,98 @@ void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const hea
     if (s->region[r].present)
       _region_line(b, s, (heaptop_region_t)r);
   }
+  if (s->features & HEAPTOP_FEAT_ALLOC_HOOKS)
+  {
+    _alloc_rates(b, s);
+    if (s->features & HEAPTOP_FEAT_FAIL_CB)
+      heaptop_buf_printf(b, "  failures %u", (unsigned)s->alloc.failures);
+    heaptop_buf_printf(b, "\n");
+  }
   heaptop_buf_printf(b, "\n");
   heaptop_render_tasks(b, s, view->sort);
+}
+
+#define HEAPTOP_HIST_BAR_WIDTH 30
+
+void heaptop_render_frag(heaptop_buf_t *b, const char *name, const heaptop_frag_hist_t *h)
+{
+  static const char *const labels[HEAPTOP_FRAG_BUCKETS] = {"<64", "<256", "<1K", "<4K", "<16K", "<64K", ">=64K"};
+  if (b == NULL || name == NULL || h == NULL)
+    return;
+  if (h->free_blocks == 0)
+  {
+    heaptop_buf_printf(b, "%s: no free blocks\n", name);
+    return;
+  }
+  char total[12], largest[12];
+  heaptop_fmt_bytes(total, sizeof(total), h->free_bytes);
+  heaptop_fmt_bytes(largest, sizeof(largest), h->largest);
+  heaptop_buf_printf(b, "%s: %u free blocks, %s free, largest %s\n", name, (unsigned)h->free_blocks, total, largest);
+  heaptop_buf_printf(b, "%-7s %8s %9s  %s\n", "SIZE", "BLOCKS", "BYTES", "SHARE OF FREE BYTES");
+  for (int i = 0; i < HEAPTOP_FRAG_BUCKETS; i++)
+  {
+    char bytes[12];
+    heaptop_fmt_bytes(bytes, sizeof(bytes), h->bytes[i]);
+    int width = (int)(((uint64_t)h->bytes[i] * HEAPTOP_HIST_BAR_WIDTH) / h->free_bytes);
+    if (width == 0 && h->bytes[i] > 0)
+      width = 1;
+    char bar[HEAPTOP_HIST_BAR_WIDTH + 1];
+    for (int k = 0; k < width; k++) bar[k] = '#';
+    bar[width] = '\0';
+    heaptop_buf_printf(b, "%-7s %8u %9s  %s\n", labels[i], (unsigned)h->count[i], bytes, bar);
+  }
+}
+
+static const char *_task_name(const heaptop_snapshot_t *s, const heaptop_fail_t *f, char *hex, size_t len)
+{
+  if (f->isr)
+    return "(ISR)";
+  for (uint16_t i = 0; i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    if (s->tasks[i].handle == f->task)
+      return s->tasks[i].name;
+  }
+  snprintf(hex, len, "0x%08lx", (unsigned long)f->task);
+  return hex;
+}
+
+void heaptop_render_allocs(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_fail_t *fails, size_t n)
+{
+  if (b == NULL || s == NULL)
+    return;
+  if (s->features & HEAPTOP_FEAT_ALLOC_HOOKS)
+  {
+    _alloc_rates(b, s);
+    heaptop_buf_printf(b, "\n");
+  }
+  else
+  {
+    heaptop_buf_printf(b, "allocation counters off: enable CONFIG_HEAP_USE_HOOKS\n");
+  }
+
+  if (!(s->features & HEAPTOP_FEAT_FAIL_CB))
+  {
+    heaptop_buf_printf(b, "failure log off: enable CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK\n");
+    return;
+  }
+  heaptop_buf_printf(b, "failures %u since boot\n", (unsigned)s->alloc.failures);
+  if (fails == NULL || n == 0)
+    return;
+  heaptop_buf_printf(b, "LAST FAILURES (newest first)\n");
+  heaptop_buf_printf(b, "%8s %8s %10s  %-16s %s\n", "AGE", "SIZE", "CAPS", "TASK", "FUNCTION");
+  for (size_t i = 0; i < n; i++)
+  {
+    const heaptop_fail_t *f = &fails[i];
+    const uint64_t age = s->uptime_us > f->t_us ? (s->uptime_us - f->t_us) / 100000u : 0;
+    char agestr[16], size[12], hex[16];
+    snprintf(agestr, sizeof(agestr), "%lu.%lus", (unsigned long)(age / 10u), (unsigned long)(age % 10u));
+    heaptop_fmt_bytes(size, sizeof(size), f->size);
+    heaptop_buf_printf(b,
+                       "%8s %8s 0x%08lx  %-16.16s %s\n",
+                       agestr,
+                       size,
+                       (unsigned long)f->caps,
+                       _task_name(s, f, hex, sizeof(hex)),
+                       f->func ? f->func : "?");
+  }
 }

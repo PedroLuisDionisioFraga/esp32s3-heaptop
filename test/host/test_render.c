@@ -299,9 +299,115 @@ static void test_top_marks_paused(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "sort stack"));
 }
 
+static void test_top_shows_alloc_rates_when_hooks_on(void)
+{
+  const heaptop_top_view_t view = {.sort = HEAPTOP_SORT_CPU};
+  _fill_top();
+  s_snap.features |= HEAPTOP_FEAT_ALLOC_HOOKS;
+  s_snap.alloc.allocs_per_s = 120;
+  heaptop_render_top(&s_buf, &s_snap, &view);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "allocs/s 120"));
+
+  heaptop_buf_init(&s_buf, s_mem, sizeof(s_mem));
+  s_snap.features &= ~HEAPTOP_FEAT_ALLOC_HOOKS;
+  heaptop_render_top(&s_buf, &s_snap, &view);
+  TEST_ASSERT_NULL(strstr(s_mem, "allocs/s"));
+}
+
+static void test_frag_histogram_rows(void)
+{
+  heaptop_frag_hist_t h;
+  memset(&h, 0, sizeof(h));
+  h.count[0] = 5;
+  h.bytes[0] = 200;
+  h.count[6] = 1;
+  h.bytes[6] = 110592;
+  h.free_blocks = 6;
+  h.free_bytes = 110792;
+  h.largest = 110592;
+  char line[256];
+  heaptop_render_frag(&s_buf, "internal", &h);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "internal"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "6 free blocks"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "<64 ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, " 5 "));
+  TEST_ASSERT_NOT_NULL(strstr(line, "200"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, ">=64K", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "108.0K"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "#"));
+}
+
+static void test_frag_histogram_empty_region(void)
+{
+  heaptop_frag_hist_t h;
+  memset(&h, 0, sizeof(h));
+  heaptop_render_frag(&s_buf, "psram", &h);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "no free blocks"));
+}
+
+static void _fill_allocs(void)
+{
+  s_snap.features = HEAPTOP_FEAT_ALLOC_HOOKS | HEAPTOP_FEAT_FAIL_CB;
+  s_snap.uptime_us = 20ULL * 1000000u;
+  s_snap.alloc.allocs_per_s = 120;
+  s_snap.alloc.frees_per_s = 118;
+  s_snap.alloc.bytes_per_s = 4608;
+  s_snap.alloc.failures = 3;
+  _add_task("stress", 0, 1000, 0, HEAPTOP_TASK_BLOCKED);
+  s_snap.tasks[0].handle = 0x3FC90000u;
+}
+
+static void test_allocs_rates_line(void)
+{
+  _fill_allocs();
+  heaptop_render_allocs(&s_buf, &s_snap, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "allocs/s 120"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "frees/s 118"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "4.5K"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "failures 3"));
+}
+
+static void test_allocs_failure_rows_resolve_task_and_isr(void)
+{
+  heaptop_fail_t f[3];
+  memset(f, 0, sizeof(f));
+  f[0] = (heaptop_fail_t){.t_us = 8000000u,
+                          .size = 10000000u,
+                          .caps = 0x1800,
+                          .func = "heap_caps_malloc",
+                          .task = 0x3FC90000u};
+  f[1] = (heaptop_fail_t){.t_us = 5000000u, .size = 64, .caps = 0x8, .func = "heap_caps_calloc", .isr = true};
+  f[2] = (heaptop_fail_t){.t_us = 1000000u, .size = 128, .caps = 0x4, .func = "heap_caps_realloc", .task = 0x3FC9FFF0u};
+  char line[256];
+  _fill_allocs();
+  heaptop_render_allocs(&s_buf, &s_snap, f, 3);
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_malloc", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "stress"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "9.5M"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "12.0s"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_calloc", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "(ISR)"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_realloc", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "0x3fc9fff0"));
+}
+
+static void test_allocs_reports_disabled_sources(void)
+{
+  s_snap.features = 0;
+  heaptop_render_allocs(&s_buf, &s_snap, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAP_USE_HOOKS"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK"));
+}
+
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_top_shows_alloc_rates_when_hooks_on);
+  RUN_TEST(test_frag_histogram_rows);
+  RUN_TEST(test_frag_histogram_empty_region);
+  RUN_TEST(test_allocs_rates_line);
+  RUN_TEST(test_allocs_failure_rows_resolve_task_and_isr);
+  RUN_TEST(test_allocs_reports_disabled_sources);
   RUN_TEST(test_fmt_bytes_units);
   RUN_TEST(test_buf_appends_formatted_text);
   RUN_TEST(test_buf_truncates_without_overflow);

@@ -66,6 +66,21 @@ uint32_t heaptop_calc_delta_u32(uint32_t now, uint32_t prev);
  */
 bool heaptop_calc_prev_find(const heaptop_calc_prev_t *prev, size_t n, uintptr_t handle, uint64_t *counter);
 
+/** @brief Histogram bucket of a free block: 0 (<64) .. HEAPTOP_FRAG_BUCKETS-1 (>=64K). */
+uint8_t heaptop_calc_bucket(uint32_t size);
+
+/** @brief Add one free block to a histogram. */
+void heaptop_calc_hist_add(heaptop_frag_hist_t *h, uint32_t size);
+
+/**
+ * @brief Copy failure records from a ring, newest first.
+ *
+ * @param buf,cap,head,count The ring: head is the next write slot.
+ * @return records copied (<= @p max).
+ */
+uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_t head, uint16_t count,
+                                heaptop_fail_t *out, uint16_t max);
+
 /**
  * @brief Order task indices by @p key without moving the tasks.
  *

@@ -106,6 +106,30 @@ typedef struct heaptop_alloc_stats
   uint32_t failures;    /**< failed allocations since boot */
 } heaptop_alloc_stats_t;
 
+/** Free-block size buckets: <64, <256, <1K, <4K, <16K, <64K, >=64K. */
+#define HEAPTOP_FRAG_BUCKETS 7
+
+/** Free-block histogram of one region (from heap_caps_walk). */
+typedef struct heaptop_frag_hist
+{
+  uint32_t count[HEAPTOP_FRAG_BUCKETS];
+  uint32_t bytes[HEAPTOP_FRAG_BUCKETS];
+  uint32_t free_blocks;
+  uint32_t free_bytes;
+  uint32_t largest;
+} heaptop_frag_hist_t;
+
+/** One failed allocation, as reported by the IDF failed-allocation callback. */
+typedef struct heaptop_fail
+{
+  uint64_t t_us;    /**< uptime when it failed */
+  uint32_t size;    /**< bytes requested */
+  uint32_t caps;    /**< MALLOC_CAP_* requested */
+  const char *func; /**< heap API that failed (string literal) */
+  uintptr_t task;   /**< task handle; resolve against the snapshot, never dereference */
+  bool isr;         /**< failed inside an interrupt */
+} heaptop_fail_t;
+
 /** Samples of history carried in each snapshot for sparklines. */
 #define HEAPTOP_TREND_LEN 40
 

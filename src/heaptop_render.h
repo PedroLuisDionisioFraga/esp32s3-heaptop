@@ -56,6 +56,16 @@ void heaptop_render_sparkline(char *out, size_t len, const uint32_t *v, size_t n
 /** @brief Full `ht top` frame: header, core bars, regions with trends, task table. */
 void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_top_view_t *view);
 
+/** @brief Free-block histogram of the region called @p name. */
+void heaptop_render_frag(heaptop_buf_t *b, const char *name, const heaptop_frag_hist_t *h);
+
+/**
+ * @brief Allocation rates and the failure log.
+ *
+ * @param fails Newest first; task handles are resolved to names through @p s.
+ */
+void heaptop_render_allocs(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_fail_t *fails, size_t n);
+
 /** @brief Region table: total, free, min free, largest block, fragmentation, blocks. */
 void heaptop_render_heap(heaptop_buf_t *b, const heaptop_snapshot_t *s);
 

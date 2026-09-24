@@ -45,11 +45,21 @@ typedef struct heaptop_sub
   heaptop_sub_fn_t fn;
 } heaptop_sub_t;
 
+#if CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK
+#define HEAPTOP_CON_FAILS CONFIG_HEAPTOP_FAIL_RING_LEN
+#else
+#define HEAPTOP_CON_FAILS 1
+#endif
+
 typedef struct heaptop_console_priv
 {
   /* --- Allocated once at registration; used only from the console task. --- */
   char *out;
   heaptop_snapshot_t *snap;
+
+  /* --- Console-task scratch. --- */
+  heaptop_frag_hist_t hist;
+  heaptop_fail_t fails[HEAPTOP_CON_FAILS];
 } heaptop_console_priv_t;
 
 static heaptop_console_priv_t s_con;
@@ -119,6 +129,47 @@ static int _cmd_tasks(int argc, char **argv)
   heaptop_buf_t b;
   heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
   heaptop_render_tasks(&b, s_con.snap, key);
+  _flush(&b);
+  return 0;
+}
+
+static int _cmd_frag(int argc, char **argv)
+{
+  static const char *const names[HEAPTOP_REGION_COUNT] = {"internal", "dma", "psram"};
+  heaptop_region_t region = HEAPTOP_REGION_INTERNAL;
+  if (argc > 1)
+  {
+    region = HEAPTOP_REGION_COUNT;
+    for (int r = 0; r < HEAPTOP_REGION_COUNT; r++)
+    {
+      if (strcmp(argv[1], names[r]) == 0)
+        region = (heaptop_region_t)r;
+    }
+    if (region == HEAPTOP_REGION_COUNT)
+    {
+      printf("ht frag: unknown region '%s' (use internal, dma or psram)\n", argv[1]);
+      return 1;
+    }
+  }
+  /* Walked here, in the console task: the sampler never pays for it. */
+  heaptop_heap_histogram(region, &s_con.hist);
+  heaptop_buf_t b;
+  heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
+  heaptop_render_frag(&b, names[region], &s_con.hist);
+  _flush(&b);
+  return 0;
+}
+
+static int _cmd_allocs(int argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+  if (!_load_snapshot())
+    return 1;
+  const uint16_t n = heaptop_hooks_failures(s_con.fails, HEAPTOP_CON_FAILS);
+  heaptop_buf_t b;
+  heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
+  heaptop_render_allocs(&b, s_con.snap, s_con.fails, n);
   _flush(&b);
   return 0;
 }
@@ -243,6 +294,8 @@ static int _cmd_top(int argc, char **argv)
 
 static const heaptop_sub_t s_subs[] = {
   {"top", "[refresh_ms]", "Live view; q quits, c/m/s/n sort, +/- refresh, p pause", _cmd_top},
+  {"frag", "[internal|dma|psram]", "Free-block size histogram of a region", _cmd_frag},
+  {"allocs", "", "Allocation rates and the last allocation failures", _cmd_allocs},
   {"heap", "", "Heap regions: free, min free, largest block, fragmentation", _cmd_heap},
   {"tasks", "[cpu|heap|stack|name]", "Tasks: state, CPU %, stack high-water mark, heap held", _cmd_tasks},
 };

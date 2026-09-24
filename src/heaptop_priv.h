@@ -31,6 +31,18 @@ void heaptop_tasks_deinit(void);
 /** Fill tasks, CPU %, core load and per-task heap. Sampler task only. */
 void heaptop_tasks_sample(heaptop_snapshot_t *s);
 
+/** Free-block histogram of one region; walks the heap under its lock. Any task. */
+void heaptop_heap_histogram(heaptop_region_t region, heaptop_frag_hist_t *h);
+
+/** Register the failed-allocation callback (once per boot). */
+void heaptop_hooks_init(void);
+
+/** Fill allocation rates, failure count and feature bits; needs s->dt_ms. Sampler task only. */
+void heaptop_hooks_sample(heaptop_snapshot_t *s);
+
+/** Copy the logged allocation failures, newest first. Any task. */
+uint16_t heaptop_hooks_failures(heaptop_fail_t *out, uint16_t max);
+
 #ifdef __cplusplus
 }
 #endif

@@ -32,6 +32,37 @@ uint16_t heaptop_ring_copy(const heaptop_ring_t *r, uint32_t *out, uint16_t max)
   return n;
 }
 
+uint8_t heaptop_calc_bucket(uint32_t size)
+{
+  static const uint32_t limits[HEAPTOP_FRAG_BUCKETS - 1] = {64u, 256u, 1024u, 4096u, 16384u, 65536u};
+  uint8_t b = 0;
+  while (b < HEAPTOP_FRAG_BUCKETS - 1 && size >= limits[b]) b++;
+  return b;
+}
+
+void heaptop_calc_hist_add(heaptop_frag_hist_t *h, uint32_t size)
+{
+  if (h == NULL)
+    return;
+  const uint8_t b = heaptop_calc_bucket(size);
+  h->count[b]++;
+  h->bytes[b] += size;
+  h->free_blocks++;
+  h->free_bytes += size;
+  if (size > h->largest)
+    h->largest = size;
+}
+
+uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_t head, uint16_t count,
+                                heaptop_fail_t *out, uint16_t max)
+{
+  if (buf == NULL || out == NULL || cap == 0)
+    return 0;
+  const uint16_t n = count < max ? count : max;
+  for (uint16_t i = 0; i < n; i++) out[i] = buf[(head + cap - 1u - i) % cap];
+  return n;
+}
+
 uint16_t heaptop_calc_frag_pct10(uint32_t free, uint32_t largest)
 {
   if (free == 0 || largest >= free)

@@ -194,9 +194,78 @@ static void test_ring_empty_copies_nothing(void)
   TEST_ASSERT_EQUAL_UINT32(7, out[0]);
 }
 
+static void test_bucket_boundaries(void)
+{
+  TEST_ASSERT_EQUAL_UINT8(0, heaptop_calc_bucket(0));
+  TEST_ASSERT_EQUAL_UINT8(0, heaptop_calc_bucket(63));
+  TEST_ASSERT_EQUAL_UINT8(1, heaptop_calc_bucket(64));
+  TEST_ASSERT_EQUAL_UINT8(1, heaptop_calc_bucket(255));
+  TEST_ASSERT_EQUAL_UINT8(2, heaptop_calc_bucket(256));
+  TEST_ASSERT_EQUAL_UINT8(3, heaptop_calc_bucket(1024));
+  TEST_ASSERT_EQUAL_UINT8(4, heaptop_calc_bucket(4096));
+  TEST_ASSERT_EQUAL_UINT8(5, heaptop_calc_bucket(16384));
+  TEST_ASSERT_EQUAL_UINT8(5, heaptop_calc_bucket(65535));
+  TEST_ASSERT_EQUAL_UINT8(6, heaptop_calc_bucket(65536));
+  TEST_ASSERT_EQUAL_UINT8(6, heaptop_calc_bucket(8u * 1024u * 1024u));
+}
+
+static void test_hist_add_counts_bytes_and_largest(void)
+{
+  heaptop_frag_hist_t h;
+  memset(&h, 0, sizeof(h));
+  heaptop_calc_hist_add(&h, 32);
+  heaptop_calc_hist_add(&h, 48);
+  heaptop_calc_hist_add(&h, 70000);
+  TEST_ASSERT_EQUAL_UINT32(2, h.count[0]);
+  TEST_ASSERT_EQUAL_UINT32(80, h.bytes[0]);
+  TEST_ASSERT_EQUAL_UINT32(1, h.count[6]);
+  TEST_ASSERT_EQUAL_UINT32(3, h.free_blocks);
+  TEST_ASSERT_EQUAL_UINT32(70080, h.free_bytes);
+  TEST_ASSERT_EQUAL_UINT32(70000, h.largest);
+}
+
+static void _fail_ring(heaptop_fail_t *buf, uint16_t cap, uint16_t pushes, uint16_t *head, uint16_t *count)
+{
+  *head = 0;
+  *count = 0;
+  for (uint16_t i = 1; i <= pushes; i++)
+  {
+    memset(&buf[*head], 0, sizeof(buf[0]));
+    buf[*head].size = i;
+    *head = (uint16_t)((*head + 1) % cap);
+    if (*count < cap)
+      (*count)++;
+  }
+}
+
+static void test_fail_copy_is_newest_first(void)
+{
+  heaptop_fail_t buf[4], out[4];
+  uint16_t head, count;
+  _fail_ring(buf, 4, 3, &head, &count);
+  TEST_ASSERT_EQUAL_UINT16(3, heaptop_calc_fail_copy(buf, 4, head, count, out, 4));
+  TEST_ASSERT_EQUAL_UINT32(3, out[0].size);
+  TEST_ASSERT_EQUAL_UINT32(2, out[1].size);
+  TEST_ASSERT_EQUAL_UINT32(1, out[2].size);
+}
+
+static void test_fail_copy_after_wrap_and_limited(void)
+{
+  heaptop_fail_t buf[3], out[2];
+  uint16_t head, count;
+  _fail_ring(buf, 3, 7, &head, &count);
+  TEST_ASSERT_EQUAL_UINT16(2, heaptop_calc_fail_copy(buf, 3, head, count, out, 2));
+  TEST_ASSERT_EQUAL_UINT32(7, out[0].size);
+  TEST_ASSERT_EQUAL_UINT32(6, out[1].size);
+}
+
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_bucket_boundaries);
+  RUN_TEST(test_hist_add_counts_bytes_and_largest);
+  RUN_TEST(test_fail_copy_is_newest_first);
+  RUN_TEST(test_fail_copy_after_wrap_and_limited);
   RUN_TEST(test_frag_is_zero_when_free_is_one_block);
   RUN_TEST(test_frag_counts_free_bytes_outside_largest_block);
   RUN_TEST(test_frag_is_zero_when_nothing_is_free);

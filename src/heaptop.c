@@ -83,6 +83,7 @@ static void _sample_once(void)
 
   heaptop_heap_sample(w);
   heaptop_tasks_sample(w);
+  heaptop_hooks_sample(w);
   _push_trends(w);
 
   w->seq = ++s_priv.seq;
@@ -159,6 +160,8 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
     ESP_LOGE(TAG, "task buffers: %s", esp_err_to_name(err));
     goto fail;
   }
+
+  heaptop_hooks_init();
 
   s_priv.running = true;
   TaskHandle_t task = NULL;
