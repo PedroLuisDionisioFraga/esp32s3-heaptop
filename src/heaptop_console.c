@@ -6,6 +6,7 @@
  * buffer and one snapshot copy allocated at registration.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,8 @@
 #define HEAPTOP_REFRESH_MIN_MS 100
 #define HEAPTOP_REFRESH_MAX_MS 10000
 #define HEAPTOP_KEY_CTRL_C     0x03
+#define HEAPTOP_KEY_NONE       (-1)
+#define HEAPTOP_KEY_BROKEN     (-2)
 #define HEAPTOP_STREAM_POLL_MS 200
 
 /* ANSI: alternate screen + hidden cursor while `ht top` owns the terminal. */
@@ -253,18 +256,40 @@ static int _cmd_diff(int argc, char **argv)
   return 0;
 }
 
-/* Wait up to @p ms for one byte on stdin; -1 on timeout. The wait doubles as the refresh tick. */
-static int _wait_key(uint32_t ms)
+/* Wait up to @p ms for one byte on stdin. The wait doubles as the refresh tick.
+ * Returns the byte, HEAPTOP_KEY_NONE on timeout, or HEAPTOP_KEY_BROKEN when stdin
+ * cannot be waited on (for example a UART console without its driver installed):
+ * callers must stop then, or they would spin without ever seeing `q`. */
+static int _wait_key(uint32_t ms, int *err)
 {
   const int fd = fileno(stdin);
   fd_set rfds;
   FD_ZERO(&rfds);
   FD_SET(fd, &rfds);
   struct timeval tv = {.tv_sec = ms / 1000u, .tv_usec = (ms % 1000u) * 1000u};
-  if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0)
-    return -1;
+  const int r = select(fd + 1, &rfds, NULL, NULL, &tv);
+  if (r < 0)
+  {
+    *err = errno;
+    return HEAPTOP_KEY_BROKEN;
+  }
+  if (r == 0)
+    return HEAPTOP_KEY_NONE;
   unsigned char c;
-  return read(fd, &c, 1) == 1 ? c : -1;
+  const ssize_t n = read(fd, &c, 1);
+  if (n == 1)
+    return c;
+  if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+  {
+    *err = errno;
+    return HEAPTOP_KEY_BROKEN;
+  }
+  return HEAPTOP_KEY_NONE;
+}
+
+static void _report_broken(const char *cmd, int err)
+{
+  printf("%s: cannot wait for keys on stdin (%s); is the console driver installed?\n", cmd, strerror(err));
 }
 
 /* Frame in place: home, each line cleared to its end, rest of the screen cleared. */
@@ -316,6 +341,7 @@ static int _cmd_top(int argc, char **argv)
   if (ansi)
     fputs(HEAPTOP_ANSI_ENTER, stdout);
 
+  int err = 0;
   uint32_t shown_seq = 0;
   bool redraw = true;
   for (;;)
@@ -332,8 +358,10 @@ static int _cmd_top(int argc, char **argv)
       redraw = false;
     }
 
-    const int key = _wait_key(view.refresh_ms);
-    if (key < 0)
+    const int key = _wait_key(view.refresh_ms, &err);
+    if (key == HEAPTOP_KEY_BROKEN)
+      break;
+    if (key == HEAPTOP_KEY_NONE)
       continue;
     redraw = true;
     if (key == 'q' || key == 'Q' || key == HEAPTOP_KEY_CTRL_C)
@@ -371,6 +399,11 @@ static int _cmd_top(int argc, char **argv)
     fputs(HEAPTOP_ANSI_LEAVE, stdout);
   fflush(stdout);
   heaptop_alerts_set_quiet(false);
+  if (err)
+  {
+    _report_broken("ht top", err);
+    return 1;
+  }
   return 0;
 }
 
@@ -399,6 +432,7 @@ static int _cmd_stream(int argc, char **argv)
   /* Alerts arrive as JSON lines instead of log lines while streaming. */
   heaptop_alerts_set_quiet(true);
   memset(&s_con.emit, 0, sizeof(s_con.emit));
+  int err = 0;
   uint32_t last_seq = 0;
   uint64_t last_emit_us = 0;
   for (;;)
@@ -410,10 +444,16 @@ static int _cmd_stream(int argc, char **argv)
       last_seq = s_con.snap->seq;
       last_emit_us = s_con.snap->uptime_us;
     }
-    if (_is_quit(_wait_key(HEAPTOP_STREAM_POLL_MS)))
+    const int key = _wait_key(HEAPTOP_STREAM_POLL_MS, &err);
+    if (key == HEAPTOP_KEY_BROKEN || _is_quit(key))
       break;
   }
   heaptop_alerts_set_quiet(false);
+  if (err)
+  {
+    _report_broken("ht stream", err);
+    return 1;
+  }
   return 0;
 }
 
