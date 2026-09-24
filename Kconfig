@@ -131,7 +131,10 @@ menu "Heaptop"
         config HEAPTOP_ALERT_STACK_HWM_MIN
             int "Task stack high-water mark floor (bytes, 0 = off)"
             range 0 65536
-            default 512
+            default 256
+            help
+                IDF's own ipc tasks normally keep only 500-600 bytes free, so a
+                floor near 512 would keep this alert on all the time.
 
         config HEAPTOP_ALERT_TASK_GROWTH
             int "Task heap growth over the history window (bytes, 0 = off)"
@@ -139,9 +142,9 @@ menu "Heaptop"
             default 4096
             help
                 A task is a leak suspect when its heap grew by at least this much
-                across the history window in several separate steps, kept growing
-                in the second half of the window, never dropped below where it
-                started, and still holds nearly all of it.
+                across the history window in several separate steps, grew in
+                every third of the window, never dropped below where it started,
+                and still holds nearly all of it.
 
         config HEAPTOP_ALERT_HYSTERESIS_PCT
             int "Hysteresis before an alert clears (%)"

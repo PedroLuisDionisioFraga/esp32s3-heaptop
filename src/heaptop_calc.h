@@ -103,8 +103,8 @@ void heaptop_calc_leak_sort(heaptop_leak_group_t *groups, size_t n);
  *
  * True when there are at least HEAPTOP_LEAK_MIN_SAMPLES samples, the value grew
  * by at least @p threshold in at least HEAPTOP_LEAK_MIN_RISES separate steps,
- * was still growing in the second half of the window, never dropped below where
- * it started, and is within 10% of its peak. A @p threshold of 0 disables it.
+ * grew by at least threshold/6 in each third of the window, never dropped below
+ * where it started, and is within 10% of its peak. A @p threshold of 0 disables it.
  *
  * @param[out] growth Last minus first sample (may be NULL).
  */

@@ -357,6 +357,14 @@ static void test_leak_suspect_ignores_growth_that_stopped(void)
   TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
 }
 
+static void test_leak_suspect_ignores_boot_step_then_small_growth(void)
+{
+  /* Seen on hardware: `main` after boot (+29 KB in one step), then console
+   * history adding a few hundred bytes per command. */
+  const uint32_t v[] = {1000, 30000, 30100, 30200, 30300, 30400, 30500, 30600, 30700};
+  TEST_ASSERT_FALSE(heaptop_calc_leak_suspect(v, 9, 4096, NULL));
+}
+
 static void test_leak_suspect_catches_staircase_leak(void)
 {
   const uint32_t v[] = {100, 100, 1100, 1100, 2100, 2100, 3100, 3100, 4100, 4100, 5100};
@@ -571,6 +579,7 @@ int main(void)
   RUN_TEST(test_leak_suspect_ignores_memory_given_back);
   RUN_TEST(test_leak_suspect_ignores_one_step_then_flat);
   RUN_TEST(test_leak_suspect_ignores_growth_that_stopped);
+  RUN_TEST(test_leak_suspect_ignores_boot_step_then_small_growth);
   RUN_TEST(test_leak_suspect_catches_staircase_leak);
   RUN_TEST(test_growth_track_reuses_and_claims_slots);
   RUN_TEST(test_growth_track_evicts_task_not_seen_last_sample);

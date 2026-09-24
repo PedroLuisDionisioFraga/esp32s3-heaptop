@@ -139,10 +139,17 @@ bool heaptop_calc_leak_suspect(const uint32_t *v, size_t n, uint32_t threshold, 
     if (i > 0 && v[i] > v[i - 1])
       rises++;
   }
-  /* One long-lived buffer, or start-up allocations that have stopped, are not leaks:
-   * a leak keeps rising in separate steps and is still rising in the second half. */
-  if (rises < HEAPTOP_LEAK_MIN_RISES || v[n - 1] <= v[n / 2])
+  if (rises < HEAPTOP_LEAK_MIN_RISES)
     return false;
+  /* One long-lived buffer, start-up allocations that have stopped, or a boot step
+   * followed by a trickle are not leaks: a leak grows in every third of the window. */
+  const uint64_t per_third = threshold / 6u;
+  const size_t cut[4] = {0, n / 3, (2 * n) / 3, n - 1};
+  for (int k = 0; k < 3; k++)
+  {
+    if (v[cut[k + 1]] < v[cut[k]] || (uint64_t)(v[cut[k + 1]] - v[cut[k]]) < per_third)
+      return false;
+  }
   /* Still holding at least 90% of its peak: nothing was released. */
   return (uint64_t)v[n - 1] * 10u >= (uint64_t)peak * 9u;
 }
