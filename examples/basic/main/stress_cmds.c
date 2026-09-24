@@ -1,0 +1,302 @@
+/**
+ * @file stress_cmds.c
+ * @brief Misbehaviour on demand for the heaptop demo.
+ *
+ * Each workload runs in its own named task so heaptop attributes CPU, stack
+ * and heap to it. `stress stop` ends every task and frees what they kept.
+ */
+
+#include "stress_cmds.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "esp_console.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define STRESS_MAX_BLOCKS     512
+#define STRESS_TASK_STACK     4096
+#define STRESS_TASK_PRIO      1
+#define STRESS_STACK_TASK_MAX 3584 /* leave room for the task's own frames */
+#define STRESS_CPU_WINDOW_MS  100
+#define STRESS_CPU_MAX_PCT    90 /* keep the idle task (and its watchdog) alive */
+#define STRESS_FRAG_SMALL     32
+#define STRESS_FRAG_LARGE     512
+#define STRESS_BURST_SIZE     128
+#define STRESS_EXIT_POLL_MS   20
+#define STRESS_EXIT_TRIES     100
+
+typedef struct stress_priv
+{
+  /* --- Worker handles: set by the console task, cleared by each worker as it exits. --- */
+  TaskHandle_t volatile leak_task;
+  TaskHandle_t volatile cpu_task;
+  TaskHandle_t volatile stack_task;
+
+  /* --- Worker parameters: written before the worker starts. --- */
+  uint32_t leak_bytes;
+  uint32_t leak_ms;
+  uint32_t cpu_pct;
+  uint32_t stack_bytes;
+
+  /* --- Blocks kept alive on purpose; freed by `stress stop` once workers are gone. --- */
+  void *leaked[STRESS_MAX_BLOCKS];
+  volatile uint16_t leaked_n; /* written by the leak worker only */
+  void *frag[STRESS_MAX_BLOCKS];
+  uint16_t frag_n;
+
+  volatile bool stop;
+} stress_priv_t;
+
+static stress_priv_t s_stress;
+
+static void _park_until_stop(void)
+{
+  while (!s_stress.stop) vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+static void _leak_task(void *arg)
+{
+  (void)arg;
+  while (!s_stress.stop && s_stress.leaked_n < STRESS_MAX_BLOCKS)
+  {
+    void *p = malloc(s_stress.leak_bytes);
+    if (p == NULL)
+      break;
+    memset(p, 0xA5, s_stress.leak_bytes);
+    s_stress.leaked[s_stress.leaked_n] = p;
+    s_stress.leaked_n++;
+    vTaskDelay(pdMS_TO_TICKS(s_stress.leak_ms));
+  }
+  /* Stay alive so the leaked heap belongs to a live task until `stress stop`. */
+  _park_until_stop();
+  s_stress.leak_task = NULL;
+  vTaskDelete(NULL);
+}
+
+static void _cpu_task(void *arg)
+{
+  (void)arg;
+  while (!s_stress.stop)
+  {
+    const int64_t busy_until = esp_timer_get_time() + (int64_t)s_stress.cpu_pct * STRESS_CPU_WINDOW_MS * 10;
+    while (esp_timer_get_time() < busy_until)
+    {
+    }
+    vTaskDelay(pdMS_TO_TICKS(STRESS_CPU_WINDOW_MS * (100 - s_stress.cpu_pct) / 100));
+  }
+  s_stress.cpu_task = NULL;
+  vTaskDelete(NULL);
+}
+
+/* Uses about @p bytes of stack; touching buf after the call prevents a tail call. */
+static uint32_t _burn_stack(uint32_t bytes)
+{
+  volatile uint8_t buf[256];
+  memset((void *)buf, (int)bytes, sizeof(buf));
+  uint32_t sum = buf[0];
+  if (bytes > sizeof(buf))
+    sum += _burn_stack(bytes - sizeof(buf));
+  return sum + buf[sizeof(buf) - 1];
+}
+
+static void _stack_task(void *arg)
+{
+  (void)arg;
+  (void)_burn_stack(s_stress.stack_bytes);
+  _park_until_stop();
+  s_stress.stack_task = NULL;
+  vTaskDelete(NULL);
+}
+
+static bool _parse_u32(const char *s, uint32_t *out)
+{
+  char *end = NULL;
+  unsigned long v = strtoul(s, &end, 10);
+  if (end == s || *end != '\0')
+    return false;
+  *out = (uint32_t)v;
+  return true;
+}
+
+static bool _start(TaskFunction_t fn, const char *name, TaskHandle_t volatile *handle)
+{
+  if (*handle != NULL)
+  {
+    printf("%s is already running; `stress stop` first\n", name);
+    return false;
+  }
+  TaskHandle_t h = NULL;
+  if (xTaskCreate(fn, name, STRESS_TASK_STACK, NULL, STRESS_TASK_PRIO, &h) != pdPASS)
+  {
+    printf("could not create %s\n", name);
+    return false;
+  }
+  *handle = h;
+  return true;
+}
+
+static int _stop(void)
+{
+  s_stress.stop = true;
+  for (int i = 0; i < STRESS_EXIT_TRIES; i++)
+  {
+    if (!s_stress.leak_task && !s_stress.cpu_task && !s_stress.stack_task)
+      break;
+    vTaskDelay(pdMS_TO_TICKS(STRESS_EXIT_POLL_MS));
+  }
+  if (s_stress.leak_task || s_stress.cpu_task || s_stress.stack_task)
+  {
+    printf("stress workers did not exit; blocks kept\n");
+    return 1;
+  }
+  const uint16_t leaked = s_stress.leaked_n;
+  for (uint16_t i = 0; i < leaked; i++) free(s_stress.leaked[i]);
+  for (uint16_t i = 0; i < s_stress.frag_n; i++) heap_caps_free(s_stress.frag[i]);
+  printf("stopped; freed %u leaked and %u fragmentation blocks\n", leaked, s_stress.frag_n);
+  s_stress.leaked_n = 0;
+  s_stress.frag_n = 0;
+  s_stress.stop = false;
+  return 0;
+}
+
+static int _frag(uint32_t n)
+{
+  if (n == 0 || n > STRESS_MAX_BLOCKS - s_stress.frag_n)
+  {
+    printf("stress frag: n must be 1..%u\n", STRESS_MAX_BLOCKS - s_stress.frag_n);
+    return 1;
+  }
+  /* Small blocks stay, large ones between them are freed: holes the size of
+   * the large blocks that no bigger request can use. */
+  uint32_t holes = 0;
+  for (uint32_t i = 0; i < n; i++)
+  {
+    void *large = heap_caps_malloc(STRESS_FRAG_LARGE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    void *small = heap_caps_malloc(STRESS_FRAG_SMALL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (small)
+      s_stress.frag[s_stress.frag_n++] = small;
+    if (large)
+    {
+      heap_caps_free(large);
+      holes++;
+    }
+    if (!small)
+      break;
+  }
+  printf("left %lu holes of %d bytes between %d-byte blocks (internal RAM)\n",
+         (unsigned long)holes,
+         STRESS_FRAG_LARGE,
+         STRESS_FRAG_SMALL);
+  return 0;
+}
+
+static int _burst(uint32_t n)
+{
+  const int64_t t0 = esp_timer_get_time();
+  for (uint32_t i = 0; i < n; i++)
+  {
+    void *p = malloc(STRESS_BURST_SIZE);
+    free(p);
+  }
+  printf("%lu malloc/free pairs in %lld us\n", (unsigned long)n, (long long)(esp_timer_get_time() - t0));
+  return 0;
+}
+
+static int _fail(uint32_t bytes)
+{
+  void *p = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (p != NULL)
+  {
+    heap_caps_free(p);
+    printf("%lu bytes of internal RAM were available; ask for more to fail\n", (unsigned long)bytes);
+    return 1;
+  }
+  printf("allocation of %lu bytes failed as intended; see `ht allocs`\n", (unsigned long)bytes);
+  return 0;
+}
+
+static void _usage(void)
+{
+  printf("usage: stress <workload>\n"
+         "  stress leak <bytes> <ms>  task stress_leak mallocs <bytes> every <ms> and never frees\n"
+         "  stress frag <n>           leave n holes in internal RAM\n"
+         "  stress burst <n>          n malloc/free pairs right now\n"
+         "  stress stack <bytes>      task stress_stack uses <bytes> of its 4 KB stack\n"
+         "  stress fail <bytes>       an internal RAM allocation that cannot succeed\n"
+         "  stress cpu <pct>          task stress_cpu busy <pct>%% of the time (max %d)\n"
+         "  stress stop               end every workload and free what it kept\n",
+         STRESS_CPU_MAX_PCT);
+}
+
+static int _cmd_stress(int argc, char **argv)
+{
+  if (argc < 2)
+  {
+    _usage();
+    return 0;
+  }
+  const char *w = argv[1];
+  uint32_t a = 0, b = 0;
+  if (strcmp(w, "stop") == 0)
+    return _stop();
+  if (argc < 3 || !_parse_u32(argv[2], &a))
+  {
+    _usage();
+    return 1;
+  }
+  if (strcmp(w, "leak") == 0)
+  {
+    if (argc < 4 || !_parse_u32(argv[3], &b) || a == 0 || b == 0)
+    {
+      printf("stress leak: <bytes> and <ms> must be positive\n");
+      return 1;
+    }
+    s_stress.leak_bytes = a;
+    s_stress.leak_ms = b;
+    return _start(_leak_task, "stress_leak", &s_stress.leak_task) ? 0 : 1;
+  }
+  if (strcmp(w, "frag") == 0)
+    return _frag(a);
+  if (strcmp(w, "burst") == 0)
+    return _burst(a);
+  if (strcmp(w, "fail") == 0)
+    return _fail(a);
+  if (strcmp(w, "stack") == 0)
+  {
+    if (a > STRESS_STACK_TASK_MAX)
+    {
+      printf("stress stack: at most %d bytes\n", STRESS_STACK_TASK_MAX);
+      return 1;
+    }
+    s_stress.stack_bytes = a;
+    return _start(_stack_task, "stress_stack", &s_stress.stack_task) ? 0 : 1;
+  }
+  if (strcmp(w, "cpu") == 0)
+  {
+    if (a == 0 || a > STRESS_CPU_MAX_PCT)
+    {
+      printf("stress cpu: pct must be 1..%d\n", STRESS_CPU_MAX_PCT);
+      return 1;
+    }
+    s_stress.cpu_pct = a;
+    return _start(_cpu_task, "stress_cpu", &s_stress.cpu_task) ? 0 : 1;
+  }
+  _usage();
+  return 1;
+}
+
+void register_stress_commands(void)
+{
+  const esp_console_cmd_t cmd = {
+    .command = "stress",
+    .help = "Create leaks, fragmentation, CPU load and allocation failures for heaptop to show",
+    .hint = "<leak|frag|burst|stack|fail|cpu|stop> [args]",
+    .func = &_cmd_stress,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
