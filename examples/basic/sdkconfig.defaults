@@ -5,7 +5,12 @@ CONFIG_BOOTLOADER_LOG_LEVEL=2
 # Increase main task stack size (the console loop runs heaptop commands)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=7168
 
-# Enable filesystem
+# Keep console history in RAM only. Saving it to flash after every command (the
+# IDF console example's default) stalls the other core in ipc1 on each write,
+# which heaptop shows as 25-50% CPU on core 1 -- noise in a heaptop demo.
+# CONFIG_CONSOLE_STORE_HISTORY is not set
+
+# Partition table with a FAT partition, in case history storage is turned back on
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_example.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_example.csv"

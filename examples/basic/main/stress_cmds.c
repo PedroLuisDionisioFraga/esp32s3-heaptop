@@ -21,9 +21,9 @@
 #define STRESS_MAX_BLOCKS 512
 #define STRESS_TASK_STACK 4096
 #define STRESS_TASK_PRIO  1
-/* Leaves 768 bytes for the task's own frames: enough headroom to stay safe,
- * little enough that the maximum trips the default 512-byte stack alert. */
-#define STRESS_STACK_TASK_MAX (STRESS_TASK_STACK - 768)
+/* Leaves 640 bytes for the task's own frames (they take about 450 on an ESP32-S3):
+ * safe, yet the maximum trips the default 256-byte stack alert. */
+#define STRESS_STACK_TASK_MAX (STRESS_TASK_STACK - 640)
 #define STRESS_CPU_WINDOW_MS  100
 #define STRESS_CPU_MAX_PCT    90 /* keep the idle task (and its watchdog) alive */
 #define STRESS_FRAG_SMALL     32
@@ -50,6 +50,7 @@ typedef struct stress_priv
   volatile uint16_t leaked_n; /* written by the leak worker only */
   void *frag[STRESS_MAX_BLOCKS];
   uint16_t frag_n;
+  void *holes[STRESS_MAX_BLOCKS]; /* console-task scratch for `stress frag` */
 
   volatile bool stop;
 } stress_priv_t;
@@ -171,22 +172,29 @@ static int _frag(uint32_t n)
     printf("stress frag: n must be 1..%u\n", STRESS_MAX_BLOCKS - s_stress.frag_n);
     return 1;
   }
-  /* Small blocks stay, large ones between them are freed: holes the size of
-   * the large blocks that no bigger request can use. */
+  /* Lay down large/small pairs first, then free every large block: holes the
+   * size of the large blocks, pinned apart by the small ones. Freeing inside
+   * the loop would let the next large request reuse the same hole. */
   uint32_t holes = 0;
   for (uint32_t i = 0; i < n; i++)
   {
-    void *large = heap_caps_malloc(STRESS_FRAG_LARGE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_stress.holes[i] = heap_caps_malloc(STRESS_FRAG_LARGE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     void *small = heap_caps_malloc(STRESS_FRAG_SMALL, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (small)
       s_stress.frag[s_stress.frag_n++] = small;
-    if (large)
+    if (!s_stress.holes[i] || !small)
     {
-      heap_caps_free(large);
+      n = i + 1;
+      break;
+    }
+  }
+  for (uint32_t i = 0; i < n; i++)
+  {
+    if (s_stress.holes[i])
+    {
+      heap_caps_free(s_stress.holes[i]);
       holes++;
     }
-    if (!small)
-      break;
   }
   printf("left %lu holes of %d bytes between %d-byte blocks (internal RAM)\n",
          (unsigned long)holes,
