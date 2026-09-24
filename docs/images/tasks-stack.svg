@@ -1,0 +1,91 @@
+<svg class="rich-terminal" viewBox="0 0 994 269.6" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+    text { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-123645919-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-123645919-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-123645919-r1 { fill: #c5c8c6 }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-123645919-clip-terminal">
+      <rect x="0" y="0" width="975.0" height="218.6" />
+    </clipPath>
+    <clipPath id="terminal-123645919-line-0">
+    <rect x="0" y="1.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-1">
+    <rect x="0" y="25.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-2">
+    <rect x="0" y="50.3" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-3">
+    <rect x="0" y="74.7" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-4">
+    <rect x="0" y="99.1" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-5">
+    <rect x="0" y="123.5" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-6">
+    <rect x="0" y="147.9" width="976" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-123645919-line-7">
+    <rect x="0" y="172.3" width="976" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="992" height="267.6" rx="8"/><text class="terminal-123645919-title" fill="#c5c8c6" text-anchor="middle" x="496" y="27">ht&#160;tasks&#160;stack</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-123645919-clip-terminal)">
+    
+    <g class="terminal-123645919-matrix">
+    <text class="terminal-123645919-r1" x="0" y="20" textLength="280.6" clip-path="url(#terminal-123645919-line-0)">esp32s3&gt;&#160;ht&#160;tasks&#160;stack</text><text class="terminal-123645919-r1" x="976" y="20" textLength="12.2" clip-path="url(#terminal-123645919-line-0)">
+</text><text class="terminal-123645919-r1" x="0" y="44.4" textLength="829.6" clip-path="url(#terminal-123645919-line-1)">NAME&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;ST&#160;&#160;PRI&#160;CORE&#160;&#160;&#160;CPU%&#160;&#160;&#160;STACK&#160;&#160;&#160;&#160;HEAP&#160;&#160;&#160;&#160;PEAK&#160;&#160;&#160;PSRAM</text><text class="terminal-123645919-r1" x="976" y="44.4" textLength="12.2" clip-path="url(#terminal-123645919-line-1)">
+</text><text class="terminal-123645919-r1" x="0" y="68.8" textLength="829.6" clip-path="url(#terminal-123645919-line-2)">stress_stack&#160;&#160;&#160;&#160;&#160;B&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;-&#160;&#160;&#160;&#160;0.0&#160;&#160;&#160;&#160;&#160;192&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0</text><text class="terminal-123645919-r1" x="976" y="68.8" textLength="12.2" clip-path="url(#terminal-123645919-line-2)">
+</text><text class="terminal-123645919-r1" x="0" y="93.2" textLength="829.6" clip-path="url(#terminal-123645919-line-3)">ipc1&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;S&#160;&#160;&#160;&#160;24&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;0.0&#160;&#160;&#160;&#160;&#160;596&#160;&#160;&#160;&#160;&#160;&#160;64&#160;&#160;&#160;&#160;&#160;&#160;88&#160;&#160;&#160;&#160;&#160;&#160;&#160;0</text><text class="terminal-123645919-r1" x="976" y="93.2" textLength="12.2" clip-path="url(#terminal-123645919-line-3)">
+</text><text class="terminal-123645919-r1" x="0" y="117.6" textLength="829.6" clip-path="url(#terminal-123645919-line-4)">ipc0&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;S&#160;&#160;&#160;&#160;24&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;0.0&#160;&#160;&#160;&#160;&#160;596&#160;&#160;&#160;14.2K&#160;&#160;&#160;14.2K&#160;&#160;&#160;&#160;&#160;&#160;&#160;0</text><text class="terminal-123645919-r1" x="976" y="117.6" textLength="12.2" clip-path="url(#terminal-123645919-line-4)">
+</text><text class="terminal-123645919-r1" x="0" y="142" textLength="829.6" clip-path="url(#terminal-123645919-line-5)">IDLE0&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;Y&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;0&#160;&#160;&#160;99.8&#160;&#160;&#160;&#160;&#160;808&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0</text><text class="terminal-123645919-r1" x="976" y="142" textLength="12.2" clip-path="url(#terminal-123645919-line-5)">
+</text><text class="terminal-123645919-r1" x="0" y="166.4" textLength="829.6" clip-path="url(#terminal-123645919-line-6)">IDLE1&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;Y&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;1&#160;&#160;100.0&#160;&#160;&#160;&#160;&#160;872&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0</text><text class="terminal-123645919-r1" x="976" y="166.4" textLength="12.2" clip-path="url(#terminal-123645919-line-6)">
+</text><text class="terminal-123645919-r1" x="0" y="190.8" textLength="829.6" clip-path="url(#terminal-123645919-line-7)">heaptop&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;R&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;-&#160;&#160;&#160;&#160;0.0&#160;&#160;&#160;&#160;2.6K&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;0</text><text class="terminal-123645919-r1" x="976" y="190.8" textLength="12.2" clip-path="url(#terminal-123645919-line-7)">
+</text><text class="terminal-123645919-r1" x="0" y="215.2" textLength="829.6" clip-path="url(#terminal-123645919-line-8)">main&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;B&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;0.0&#160;&#160;&#160;&#160;5.8K&#160;&#160;112.2K&#160;&#160;177.7K&#160;&#160;&#160;49.9K</text><text class="terminal-123645919-r1" x="976" y="215.2" textLength="12.2" clip-path="url(#terminal-123645919-line-8)">
+</text>
+    </g>
+    </g>
+</svg>
