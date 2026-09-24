@@ -26,7 +26,8 @@ examples:
 files:
   exclude:
     - "test/**/*"
-    - "examples/basic/pytest_*.py"
+    # Local builds of the CI configs (build-minimal, build-c3, ...); build/ is excluded by default.
+    - "examples/**/build-*/**/*"
     - ".devcontainer/**/*"
     - ".vscode/**/*"
     - ".claude/**/*"
