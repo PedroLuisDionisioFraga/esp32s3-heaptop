@@ -441,6 +441,15 @@ static void test_leaks_running_overflow_and_empty(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "no surviving allocations"));
 }
 
+static void test_leaks_status_does_not_contradict_the_count(void)
+{
+  /* `ht leaks status` asks for no rows while 58 allocations survive. */
+  const heaptop_leak_info_t info = {.available = true, .duration_ms = 30400, .records = 58, .capacity = 256};
+  heaptop_render_leaks(&s_buf, &info, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "58 surviving"));
+  TEST_ASSERT_NULL(strstr(s_mem, "no surviving allocations"));
+}
+
 static heaptop_snapshot_t s_before;
 
 static void _task_in(heaptop_snapshot_t *s, const char *name, uintptr_t handle, uint32_t heap)
@@ -575,6 +584,7 @@ int main(void)
   RUN_TEST(test_leaks_off_names_the_option);
   RUN_TEST(test_leaks_header_and_rows);
   RUN_TEST(test_leaks_running_overflow_and_empty);
+  RUN_TEST(test_leaks_status_does_not_contradict_the_count);
   RUN_TEST(test_diff_regions_and_tasks);
   RUN_TEST(test_diff_without_mark);
   RUN_TEST(test_frag_histogram_rows);

@@ -461,11 +461,13 @@ void heaptop_render_leaks(heaptop_buf_t *b, const heaptop_leak_info_t *info, con
   if (info->overflowed)
     heaptop_buf_printf(b,
                        "WARNING: record buffer filled up, results are incomplete: raise CONFIG_HEAPTOP_LEAK_RECORDS\n");
-  if (groups == NULL || n == 0)
+  if (info->records == 0)
   {
     heaptop_buf_printf(b, "no surviving allocations\n");
     return;
   }
+  if (groups == NULL || n == 0)
+    return; /* status only: the count above is the answer */
 
   heaptop_buf_printf(b, "%9s %6s %10s  %s\n", "BYTES", "COUNT", "SIZE", "CALL STACK (innermost first)");
   for (size_t i = 0; i < n; i++)
