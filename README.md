@@ -1,6 +1,11 @@
 # Heaptop
 
 [![Component Registry](https://components.espressif.com/components/pedroluisdionisiofraga/heaptop/badge.svg)](https://components.espressif.com/components/pedroluisdionisiofraga/heaptop)
+[![Build Examples](https://img.shields.io/github/actions/workflow/status/PedroLuisDionisioFraga/esp32s3-heaptop/build.yml?branch=dev&label=builds)](https://github.com/PedroLuisDionisioFraga/esp32s3-heaptop/actions/workflows/build.yml)
+[![Host Tests](https://img.shields.io/github/actions/workflow/status/PedroLuisDionisioFraga/esp32s3-heaptop/host_tests.yml?branch=dev&label=host%20tests)](https://github.com/PedroLuisDionisioFraga/esp32s3-heaptop/actions/workflows/host_tests.yml)
+[![License](https://img.shields.io/github/license/PedroLuisDionisioFraga/esp32s3-heaptop)](LICENSE)
+![Targets](https://img.shields.io/badge/targets-ESP32%20%7C%20S3%20%7C%20C3%20%7C%20C6-blue)
+![ESP-IDF](https://img.shields.io/badge/ESP--IDF-%E2%89%A56.0-orange)
 
 An htop-like heap and task monitor for ESP-IDF, driven over the serial console. Heaptop answers three questions about a running firmware:
 
