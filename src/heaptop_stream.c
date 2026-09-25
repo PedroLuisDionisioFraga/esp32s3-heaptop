@@ -38,9 +38,10 @@ void heaptop_stream_sample(heaptop_buf_t *b, const heaptop_snapshot_t *s)
     return;
   _head(b, "sample");
   heaptop_buf_printf(b,
-                     ",\"seq\":%lu,\"t_ms\":%llu,\"dt_ms\":%lu,\"self_us\":%lu",
+                     ",\"seq\":%lu,\"t_ms\":%llu,\"since_ms\":%llu,\"dt_ms\":%lu,\"self_us\":%lu",
                      (unsigned long)s->seq,
                      _ms(s->uptime_us),
+                     _ms(s->since_us),
                      (unsigned long)s->dt_ms,
                      (unsigned long)s->self_us);
 
@@ -79,17 +80,8 @@ void heaptop_stream_sample(heaptop_buf_t *b, const heaptop_snapshot_t *s)
   }
   heaptop_buf_printf(b, "}");
 
-  if (s->features & HEAPTOP_FEAT_ALLOC_HOOKS)
-    heaptop_buf_printf(b,
-                       ",\"allocs_s\":%lu,\"frees_s\":%lu,\"bytes_s\":%lu",
-                       (unsigned long)s->alloc.allocs_per_s,
-                       (unsigned long)s->alloc.frees_per_s,
-                       (unsigned long)s->alloc.bytes_per_s);
-  else
-    heaptop_buf_printf(b, ",\"allocs_s\":null,\"frees_s\":null,\"bytes_s\":null");
-
   if (s->features & HEAPTOP_FEAT_FAIL_CB)
-    heaptop_buf_printf(b, ",\"failures\":%lu", (unsigned long)s->alloc.failures);
+    heaptop_buf_printf(b, ",\"failures\":%lu", (unsigned long)s->failures);
   else
     heaptop_buf_printf(b, ",\"failures\":null");
 

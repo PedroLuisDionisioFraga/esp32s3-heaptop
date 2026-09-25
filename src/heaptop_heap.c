@@ -11,22 +11,27 @@ static const uint32_t s_region_caps[HEAPTOP_REGION_COUNT] = {
   [HEAPTOP_REGION_PSRAM] = MALLOC_CAP_SPIRAM,
 };
 
-/* Runs inside the heap's critical section: count only, never allocate or print. */
-static bool _walk_cb(walker_heap_into_t heap, walker_block_info_t block, void *user_data)
+/* Minimum free size since the last clear, per region. IDF's own local-minimum
+ * monitor is not used: its first start allocates inside a spinlock, and with
+ * heap task tracking that allocation can wait on a mutex. */
+typedef struct heaptop_heap_window
 {
-  (void)heap;
-  if (!block.used)
-    heaptop_calc_hist_add((heaptop_frag_hist_t *)user_data, (uint32_t)block.size);
-  return true;
+  bool rebase;   /* a clear ran: take the next sample as the new baseline */
+  bool cleared;  /* min_free reports the window, not IDF's since-boot value */
+  uint32_t base; /* IDF's minimum at the clear */
+  uint32_t low;  /* lowest sampled free size since the clear */
+} heaptop_heap_window_t;
+
+static heaptop_heap_window_t s_win[HEAPTOP_REGION_COUNT]; /* sampler-owned */
+
+void heaptop_heap_init(void)
+{
+  memset(s_win, 0, sizeof(s_win));
 }
 
-void heaptop_heap_histogram(heaptop_region_t region, heaptop_frag_hist_t *h)
+void heaptop_heap_clear(void)
 {
-  memset(h, 0, sizeof(*h));
-  if (region >= HEAPTOP_REGION_COUNT)
-    return;
-  /* Raw TLSF blocks: sizes include block metadata, so buckets are approximate. */
-  heap_caps_walk(s_region_caps[region], _walk_cb, h);
+  for (int r = 0; r < HEAPTOP_REGION_COUNT; r++) s_win[r].rebase = true;
 }
 
 void heaptop_heap_sample(heaptop_snapshot_t *s)
@@ -46,5 +51,20 @@ void heaptop_heap_sample(heaptop_snapshot_t *s)
     rs->used_blocks = (uint32_t)info.allocated_blocks;
     rs->free_blocks = (uint32_t)info.free_blocks;
     rs->frag_pct10 = heaptop_calc_frag_pct10(rs->free, rs->largest);
+
+    heaptop_heap_window_t *w = &s_win[r];
+    if (w->rebase)
+    {
+      w->base = rs->min_free;
+      w->low = rs->free;
+      w->cleared = true;
+      w->rebase = false;
+    }
+    if (w->cleared)
+    {
+      if (rs->free < w->low)
+        w->low = rs->free;
+      rs->min_free = heaptop_calc_min_since(w->base, w->low, rs->min_free);
+    }
   }
 }

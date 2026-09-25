@@ -13,12 +13,12 @@ from pytest_embedded import Dut
 from pytest_embedded_idf.utils import idf_parametrize
 
 # Anchored on the line end: a line still arriving can end in an inner '}'.
-JSON_LINE = re.compile(rb'(\{"ht":1,[^\r\n]*\})\r?\n')
+JSON_LINE = re.compile(rb'(\{"ht":2,[^\r\n]*\})\r?\n')
 
 
 def _ready(dut: Dut) -> None:
     dut.expect(dut.target + '> ', timeout=30)
-    time.sleep(2.5)  # at least two samples, so CPU % and rates exist
+    time.sleep(2.5)  # at least two samples, so CPU % exists
 
 
 def _run(dut: Dut, line: str) -> None:
@@ -31,77 +31,49 @@ def _run(dut: Dut, line: str) -> None:
 def test_heaptop_views(dut: Dut) -> None:
     _ready(dut)
     _run(dut, 'ht help')
-    dut.expect('ht leaks')
+    dut.expect('ht health')
+    dut.expect('ht stress')
     _run(dut, 'ht heap')
     dut.expect(re.compile(rb'internal\s+[\d.]+[KM]'))
     dut.expect(re.compile(rb'psram\s+[\d.]+[KM]'))
     _run(dut, 'ht tasks')
     dut.expect('NAME')
     dut.expect('heaptop')
-    _run(dut, 'ht frag')
-    dut.expect('free blocks')
-    _run(dut, 'ht allocs')
-    dut.expect('allocs/s')
-    _run(dut, 'ht alerts')
-    dut.expect('hysteresis')
+    _run(dut, 'ht health')
+    dut.expect(re.compile(rb'health (OK|: \d+ alerts?)'))
+    dut.expect('dram_free')
+    dut.expect('back past the limit')
 
 
 @pytest.mark.generic
 @idf_parametrize('target', ['esp32s3'], indirect=['target'])
-def test_heaptop_leak_capture_groups_by_call_stack(dut: Dut) -> None:
+def test_heaptop_clear_starts_a_fresh_window(dut: Dut) -> None:
     _ready(dut)
-    _run(dut, 'ht leaks start')
-    dut.expect('leak capture running')
-    _run(dut, 'stress leak 256 50')
+    _run(dut, 'ht clear')
+    dut.expect('stats cleared')
+    _run(dut, 'ht health')
+    dut.expect(re.compile(rb'stats since clear \d+s ago'))
+    dut.expect(re.compile(rb'failures 0 since clear'))
+
+
+@pytest.mark.generic
+@idf_parametrize('target', ['esp32s3'], indirect=['target'])
+def test_heaptop_stress_loads_every_core(dut: Dut) -> None:
+    _ready(dut)
+    _run(dut, 'ht stress cpu 50 4')
+    dut.expect(re.compile(rb'cpu stress: 50% on 2 cores, \d+ s left'))
+    time.sleep(2.5)  # two samples with the load on
+    _run(dut, 'ht tasks cpu')
+    # Rows come sorted by CPU, so the two workers can print in either order.
+    table = dut.expect(re.compile(rb'NAME[^\n]*\n(.*?)' + dut.target.encode() + rb'> ', re.S)).group(1)
+    loads = {int(core): float(pct) for core, pct in
+             re.findall(rb'ht_stress(\d)\s+\S+\s+\d+\s+\d+\s+([\d.]+)', table)}
+    assert sorted(loads) == [0, 1], table
+    for core, load in loads.items():
+        assert 35.0 <= load <= 65.0, f'ht_stress{core} at {load}%'
     time.sleep(3)
-    _run(dut, 'ht leaks stop')
-    match = dut.expect(re.compile(rb'stopped after [\d.]+s: (\d+) surviving'))
-    assert int(match.group(1)) >= 20
-    dut.expect(re.compile(rb'\s+0x4[0-9a-f]{7}'))
-    _run(dut, 'stress stop')
-    dut.expect('stopped; freed')
-
-
-@pytest.mark.generic
-@idf_parametrize('target', ['esp32s3'], indirect=['target'])
-def test_heaptop_flags_leaking_task(dut: Dut) -> None:
-    _ready(dut)
-    _run(dut, 'stress leak 512 100')
-    time.sleep(24)  # a task needs >= 20 samples of history, and > 4 KB of growth, to be flagged
-    _run(dut, 'ht tasks heap')
-    dut.expect(re.compile(rb'stress_leak[^\r\n]*LEAK\?'))
-    _run(dut, 'stress stop')
-    dut.expect('stopped; freed')
-
-
-@pytest.mark.generic
-@idf_parametrize('target', ['esp32s3'], indirect=['target'])
-def test_stress_stop_survives_repeated_cycles(dut: Dut) -> None:
-    # Ending workers while their blocks are freed used to reboot the board:
-    # with task tracking, the idle task could block while cleaning up a task
-    # that deleted itself (assert in prvSelectHighestPriorityTaskSMP).
-    _ready(dut)
-    for _ in range(10):
-        _run(dut, 'stress frag 150')
-        _run(dut, 'stress leak 128 20')
-        _run(dut, 'stress cpu 30')
-        time.sleep(1.5)
-        _run(dut, 'stress stop')
-        dut.expect(re.compile(rb'stopped; freed \d+ leaked and 150 fragmentation blocks'), timeout=5)
-    _run(dut, 'ht tasks')
-    dut.expect('heaptop')
-
-
-@pytest.mark.generic
-@idf_parametrize('target', ['esp32s3'], indirect=['target'])
-def test_heaptop_logs_allocation_failure(dut: Dut) -> None:
-    _ready(dut)
-    _run(dut, 'stress fail 100000000')
-    dut.expect('failed as intended')
-    time.sleep(1.5)
-    _run(dut, 'ht allocs')
-    dut.expect(re.compile(rb'failures [1-9]\d* since boot'))
-    dut.expect('heap_caps_malloc')
+    _run(dut, 'ht stress')
+    dut.expect('cpu stress: idle')
 
 
 @pytest.mark.generic
@@ -113,8 +85,11 @@ def test_heaptop_stream_is_json_lines(dut: Dut) -> None:
     for _ in range(40):
         line = dut.expect(JSON_LINE, timeout=10).group(1)
         record = json.loads(line)
-        assert record['ht'] == 1
+        assert record['ht'] == 2
         types.add(record['type'])
+        if record['type'] == 'sample':
+            assert 'allocs_s' not in record
+            assert 'since_ms' in record
         if {'sample', 'task'} <= types:
             break
     dut.write('q')

@@ -39,7 +39,7 @@ void heaptop_emit(FILE *out, const heaptop_snapshot_t *s, heaptop_emit_state_t *
   if (changed)
   {
     heaptop_thresholds_t th;
-    heaptop_get_thresholds(&th);
+    heaptop_alerts_thresholds(&th);
     for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
     {
       const uint32_t bit = 1u << i;
@@ -56,7 +56,7 @@ void heaptop_emit(FILE *out, const heaptop_snapshot_t *s, heaptop_emit_state_t *
   st->alerts = s->alerts;
 
   /* Failures newer than the last one emitted, oldest first. */
-  const uint16_t n = heaptop_hooks_failures(st->fails, HEAPTOP_EMIT_FAILS);
+  const uint16_t n = heaptop_fails_copy(st->fails, HEAPTOP_FAIL_LEN);
   uint64_t newest = st->last_fail_us;
   for (int i = (int)n - 1; i >= 0; i--)
   {

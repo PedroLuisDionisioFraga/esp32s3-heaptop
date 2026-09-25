@@ -33,27 +33,6 @@ uint16_t heaptop_ring_copy(const heaptop_ring_t *r, uint32_t *out, uint16_t max)
   return n;
 }
 
-uint8_t heaptop_calc_bucket(uint32_t size)
-{
-  static const uint32_t limits[HEAPTOP_FRAG_BUCKETS - 1] = {64u, 256u, 1024u, 4096u, 16384u, 65536u};
-  uint8_t b = 0;
-  while (b < HEAPTOP_FRAG_BUCKETS - 1 && size >= limits[b]) b++;
-  return b;
-}
-
-void heaptop_calc_hist_add(heaptop_frag_hist_t *h, uint32_t size)
-{
-  if (h == NULL)
-    return;
-  const uint8_t b = heaptop_calc_bucket(size);
-  h->count[b]++;
-  h->bytes[b] += size;
-  h->free_blocks++;
-  h->free_bytes += size;
-  if (size > h->largest)
-    h->largest = size;
-}
-
 uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_t head, uint16_t count,
                                 heaptop_fail_t *out, uint16_t max)
 {
@@ -62,56 +41,6 @@ uint16_t heaptop_calc_fail_copy(const heaptop_fail_t *buf, uint16_t cap, uint16_
   const uint16_t n = count < max ? count : max;
   for (uint16_t i = 0; i < n; i++) out[i] = buf[(head + cap - 1u - i) % cap];
   return n;
-}
-
-bool heaptop_calc_leak_add(heaptop_leak_group_t *groups, size_t cap, size_t *n, const uintptr_t *pc, size_t depth,
-                           uint32_t size)
-{
-  if (groups == NULL || n == NULL || pc == NULL)
-    return false;
-  uintptr_t key[HEAPTOP_LEAK_DEPTH] = {0};
-  const size_t d = depth < HEAPTOP_LEAK_DEPTH ? depth : HEAPTOP_LEAK_DEPTH;
-  for (size_t k = 0; k < d; k++) key[k] = pc[k];
-
-  for (size_t i = 0; i < *n; i++)
-  {
-    heaptop_leak_group_t *g = &groups[i];
-    if (memcmp(g->pc, key, sizeof(key)) != 0)
-      continue;
-    g->count++;
-    g->bytes += size;
-    if (size < g->min_size)
-      g->min_size = size;
-    if (size > g->max_size)
-      g->max_size = size;
-    return true;
-  }
-  if (*n >= cap)
-    return false;
-  heaptop_leak_group_t *g = &groups[(*n)++];
-  memcpy(g->pc, key, sizeof(key));
-  g->count = 1;
-  g->bytes = size;
-  g->min_size = size;
-  g->max_size = size;
-  return true;
-}
-
-void heaptop_calc_leak_sort(heaptop_leak_group_t *groups, size_t n)
-{
-  if (groups == NULL)
-    return;
-  for (size_t i = 1; i < n; i++)
-  {
-    heaptop_leak_group_t cur = groups[i];
-    size_t j = i;
-    while (j > 0 && groups[j - 1].bytes < cur.bytes)
-    {
-      groups[j] = groups[j - 1];
-      j--;
-    }
-    groups[j] = cur;
-  }
 }
 
 bool heaptop_calc_leak_suspect(const uint32_t *v, size_t n, uint32_t threshold, int32_t *growth)
@@ -165,13 +94,12 @@ void heaptop_growth_init(heaptop_growth_t *g, heaptop_growth_slot_t *slots, uint
   g->window = window;
   for (uint16_t i = 0; i < g->n_slots; i++)
   {
-    slots[i].handle = 0;
-    slots[i].seen = 0;
+    memset(&slots[i], 0, sizeof(slots[i]));
     heaptop_ring_init(&slots[i].ring, mem + (size_t)i * window, window);
   }
 }
 
-heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq)
+heaptop_growth_slot_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint32_t seq)
 {
   if (g == NULL || handle == 0)
     return NULL;
@@ -180,7 +108,7 @@ heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint
     if (g->slots[i].handle == handle)
     {
       g->slots[i].seen = seq;
-      return &g->slots[i].ring;
+      return &g->slots[i];
     }
   }
   for (uint16_t i = 0; i < g->n_slots; i++)
@@ -189,13 +117,35 @@ heaptop_ring_t *heaptop_growth_track(heaptop_growth_t *g, uintptr_t handle, uint
     /* Free, or its task was missing from the previous sample: the task is gone. */
     if (s->handle == 0 || s->seen + 1u < seq)
     {
+      memset(s, 0, sizeof(*s));
       s->handle = handle;
       s->seen = seq;
       heaptop_ring_init(&s->ring, g->mem + (size_t)i * g->window, g->window);
-      return &s->ring;
+      return s;
     }
   }
   return NULL;
+}
+
+void heaptop_growth_clear(heaptop_growth_t *g)
+{
+  if (g == NULL)
+    return;
+  for (uint16_t i = 0; i < g->n_slots; i++)
+  {
+    heaptop_ring_init(&g->slots[i].ring, g->mem + (size_t)i * g->window, g->window);
+    g->slots[i].rebase = true;
+  }
+}
+
+uint32_t heaptop_calc_peak_since(uint32_t base, uint32_t max_cur, uint32_t idf_peak)
+{
+  return idf_peak > base ? idf_peak : max_cur;
+}
+
+uint32_t heaptop_calc_min_since(uint32_t base, uint32_t low, uint32_t idf_min)
+{
+  return idf_min < base ? idf_min : low;
 }
 
 bool heaptop_calc_below_floor(bool active, uint32_t value, uint32_t floor, uint32_t hyst_pct)
@@ -224,7 +174,7 @@ uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snaps
 {
   if (th == NULL || s == NULL)
     return 0;
-  const uint32_t h = th->hysteresis_pct;
+  const uint32_t h = HEAPTOP_HYSTERESIS_PCT;
   uint32_t out = 0;
 
   const heaptop_region_stats_t *in = &s->region[HEAPTOP_REGION_INTERNAL];
@@ -259,7 +209,7 @@ uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snaps
     out |= HEAPTOP_ALERT_STACK;
   if (any_leak && th->task_growth != 0)
     out |= HEAPTOP_ALERT_LEAK;
-  if ((s->features & HEAPTOP_FEAT_FAIL_CB) && s->alloc.failures != prev_failures)
+  if ((s->features & HEAPTOP_FEAT_FAIL_CB) && s->failures != prev_failures)
     out |= HEAPTOP_ALERT_ALLOC_FAIL;
   return out;
 }
@@ -345,19 +295,6 @@ uint16_t heaptop_calc_busy_pct10(uint64_t idle_delta, uint64_t wall_delta)
   if (wall_delta == 0)
     return 0;
   return (uint16_t)(1000u - heaptop_calc_pct10(idle_delta, wall_delta));
-}
-
-uint32_t heaptop_calc_rate_per_s(uint32_t delta, uint32_t dt_ms)
-{
-  if (dt_ms == 0)
-    return 0;
-  uint64_t rate = ((uint64_t)delta * 1000u) / dt_ms;
-  return rate > UINT32_MAX ? UINT32_MAX : (uint32_t)rate;
-}
-
-uint32_t heaptop_calc_delta_u32(uint32_t now, uint32_t prev)
-{
-  return now - prev;
 }
 
 bool heaptop_calc_prev_find(const heaptop_calc_prev_t *prev, size_t n, uintptr_t handle, uint64_t *counter)

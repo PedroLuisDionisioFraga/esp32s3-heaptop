@@ -49,12 +49,6 @@ typedef struct heaptop_sub
   heaptop_sub_fn_t fn;
 } heaptop_sub_t;
 
-#if CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK
-#define HEAPTOP_CON_FAILS CONFIG_HEAPTOP_FAIL_RING_LEN
-#else
-#define HEAPTOP_CON_FAILS 1
-#endif
-
 typedef struct heaptop_console_priv
 {
   /* --- Allocated once at registration; used only from the console task. --- */
@@ -62,8 +56,7 @@ typedef struct heaptop_console_priv
   heaptop_snapshot_t *snap;
 
   /* --- Console-task scratch. --- */
-  heaptop_frag_hist_t hist;
-  heaptop_fail_t fails[HEAPTOP_CON_FAILS];
+  heaptop_fail_t fails[HEAPTOP_FAIL_LEN];
   heaptop_emit_state_t emit;
 } heaptop_console_priv_t;
 
@@ -91,6 +84,16 @@ static bool _load_snapshot(void)
     printf("heaptop: no sample yet, try again in a moment\n");
     return false;
   }
+  return true;
+}
+
+static bool _parse_u32(const char *s, uint32_t *out)
+{
+  char *end = NULL;
+  const unsigned long v = strtoul(s, &end, 10);
+  if (end == s || *end != '\0')
+    return false;
+  *out = (uint32_t)v;
   return true;
 }
 
@@ -135,124 +138,6 @@ static int _cmd_tasks(int argc, char **argv)
   heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
   heaptop_render_tasks(&b, s_con.snap, key);
   _flush(&b);
-  return 0;
-}
-
-static int _cmd_frag(int argc, char **argv)
-{
-  static const char *const names[HEAPTOP_REGION_COUNT] = {"internal", "dma", "psram"};
-  heaptop_region_t region = HEAPTOP_REGION_INTERNAL;
-  if (argc > 1)
-  {
-    region = HEAPTOP_REGION_COUNT;
-    for (int r = 0; r < HEAPTOP_REGION_COUNT; r++)
-    {
-      if (strcmp(argv[1], names[r]) == 0)
-        region = (heaptop_region_t)r;
-    }
-    if (region == HEAPTOP_REGION_COUNT)
-    {
-      printf("ht frag: unknown region '%s' (use internal, dma or psram)\n", argv[1]);
-      return 1;
-    }
-  }
-  /* Walked here, in the console task: the sampler never pays for it. */
-  heaptop_heap_histogram(region, &s_con.hist);
-  heaptop_buf_t b;
-  heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
-  heaptop_render_frag(&b, names[region], &s_con.hist);
-  _flush(&b);
-  return 0;
-}
-
-static int _cmd_allocs(int argc, char **argv)
-{
-  (void)argc;
-  (void)argv;
-  if (!_load_snapshot())
-    return 1;
-  const uint16_t n = heaptop_hooks_failures(s_con.fails, HEAPTOP_CON_FAILS);
-  heaptop_buf_t b;
-  heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
-  heaptop_render_allocs(&b, s_con.snap, s_con.fails, n);
-  _flush(&b);
-  return 0;
-}
-
-#define HEAPTOP_LEAK_ROWS_DEFAULT 10
-
-static int _leaks_err(const char *what, esp_err_t err)
-{
-  if (err == ESP_ERR_NOT_SUPPORTED)
-    printf("ht leaks: heap tracing is off: enable CONFIG_HEAP_TRACING_STANDALONE\n");
-  else if (err == ESP_ERR_INVALID_STATE)
-    printf("ht leaks %s: %s\n", what, strcmp(what, "start") == 0 ? "already running" : "not running");
-  else
-    printf("ht leaks %s: %s\n", what, esp_err_to_name(err));
-  return 1;
-}
-
-static int _cmd_leaks(int argc, char **argv)
-{
-  const char *action = argc > 1 ? argv[1] : "report";
-  if (strcmp(action, "start") == 0)
-  {
-    esp_err_t err = heaptop_leaks_start();
-    if (err != ESP_OK)
-      return _leaks_err("start", err);
-    printf("leak capture running: exercise the code, then `ht leaks stop` and `ht leaks report`\n");
-    return 0;
-  }
-  if (strcmp(action, "stop") == 0)
-  {
-    esp_err_t err = heaptop_leaks_stop();
-    if (err != ESP_OK)
-      return _leaks_err("stop", err);
-    return heaptop_leaks_report(stdout, HEAPTOP_LEAK_ROWS_DEFAULT) == ESP_OK ? 0 : 1;
-  }
-  if (strcmp(action, "status") == 0)
-    return heaptop_leaks_report(stdout, 0) == ESP_OK ? 0 : 1;
-  if (strcmp(action, "report") == 0)
-  {
-    unsigned long rows = HEAPTOP_LEAK_ROWS_DEFAULT;
-    if (argc > 2)
-    {
-      char *end = NULL;
-      rows = strtoul(argv[2], &end, 10);
-      if (end == argv[2] || *end != '\0' || rows == 0)
-      {
-        printf("ht leaks report: rows must be a positive number\n");
-        return 1;
-      }
-    }
-    return heaptop_leaks_report(stdout, rows) == ESP_OK ? 0 : 1;
-  }
-  printf("ht leaks: unknown action '%s' (use start, stop, report [rows] or status)\n", action);
-  return 1;
-}
-
-static int _cmd_mark(int argc, char **argv)
-{
-  (void)argc;
-  (void)argv;
-  if (!_load_snapshot())
-    return 1;
-  if (heaptop_mark() != ESP_OK)
-    return 1;
-  printf("mark set at sample #%lu; run `ht diff` later to see what changed\n", (unsigned long)s_con.snap->seq);
-  return 0;
-}
-
-static int _cmd_diff(int argc, char **argv)
-{
-  (void)argc;
-  (void)argv;
-  esp_err_t err = heaptop_diff(stdout);
-  if (err != ESP_OK)
-  {
-    printf("ht diff: %s\n", esp_err_to_name(err));
-    return 1;
-  }
   return 0;
 }
 
@@ -322,14 +207,13 @@ static int _cmd_top(int argc, char **argv)
   heaptop_top_view_t view = {.sort = HEAPTOP_SORT_CPU, .paused = false, .refresh_ms = 1000};
   if (argc > 1)
   {
-    char *end = NULL;
-    unsigned long ms = strtoul(argv[1], &end, 10);
-    if (end == argv[1] || *end != '\0' || ms < HEAPTOP_REFRESH_MIN_MS || ms > HEAPTOP_REFRESH_MAX_MS)
+    uint32_t ms = 0;
+    if (!_parse_u32(argv[1], &ms) || ms < HEAPTOP_REFRESH_MIN_MS || ms > HEAPTOP_REFRESH_MAX_MS)
     {
       printf("ht top: refresh must be %d..%d ms\n", HEAPTOP_REFRESH_MIN_MS, HEAPTOP_REFRESH_MAX_MS);
       return 1;
     }
-    view.refresh_ms = (uint32_t)ms;
+    view.refresh_ms = ms;
   }
   if (!_load_snapshot())
     return 1;
@@ -417,14 +301,11 @@ static int _cmd_stream(int argc, char **argv)
   uint32_t every_ms = 0; /* 0 = every sample */
   if (argc > 1)
   {
-    char *end = NULL;
-    unsigned long ms = strtoul(argv[1], &end, 10);
-    if (end == argv[1] || *end != '\0' || ms < HEAPTOP_REFRESH_MIN_MS)
+    if (!_parse_u32(argv[1], &every_ms) || every_ms < HEAPTOP_REFRESH_MIN_MS)
     {
       printf("ht stream: interval must be >= %d ms\n", HEAPTOP_REFRESH_MIN_MS);
       return 1;
     }
-    every_ms = (uint32_t)ms;
   }
   if (!_load_snapshot())
     return 1;
@@ -457,88 +338,106 @@ static int _cmd_stream(int argc, char **argv)
   return 0;
 }
 
-static const char *const s_th_keys[] = {
-  "dram_free", "dram_largest", "frag", "psram_free", "stack", "growth", "hysteresis"};
-
-static uint32_t *_th_field(heaptop_thresholds_t *th, size_t i)
+static int _cmd_health(int argc, char **argv)
 {
-  uint32_t *const fields[] = {&th->dram_free_min,
-                              &th->dram_largest_min,
-                              &th->frag_pct_max,
-                              &th->psram_free_min,
-                              &th->stack_hwm_min,
-                              &th->task_growth,
-                              &th->hysteresis_pct};
-  return fields[i];
-}
-
-static int _cmd_alerts(int argc, char **argv)
-{
-  heaptop_thresholds_t th;
-  heaptop_get_thresholds(&th);
-  const char *action = argc > 1 ? argv[1] : "show";
-  if (strcmp(action, "set") == 0)
-  {
-    if (argc != 4)
-    {
-      printf("usage: ht alerts set <dram_free|dram_largest|frag|psram_free|stack|growth|hysteresis> <value>\n");
-      return 1;
-    }
-    size_t key = sizeof(s_th_keys) / sizeof(s_th_keys[0]);
-    for (size_t i = 0; i < sizeof(s_th_keys) / sizeof(s_th_keys[0]); i++)
-    {
-      if (strcmp(argv[2], s_th_keys[i]) == 0)
-        key = i;
-    }
-    char *end = NULL;
-    const unsigned long v = strtoul(argv[3], &end, 10);
-    if (key == sizeof(s_th_keys) / sizeof(s_th_keys[0]) || end == argv[3] || *end != '\0')
-    {
-      printf("ht alerts set: unknown key '%s' or bad value '%s'\n", argv[2], argv[3]);
-      return 1;
-    }
-    *_th_field(&th, key) = (uint32_t)v;
-    esp_err_t err = heaptop_set_thresholds(&th);
-    if (err != ESP_OK)
-    {
-      printf("ht alerts set: %s (frag is 0..100, hysteresis 0..50; 0 turns an alert off)\n", esp_err_to_name(err));
-      return 1;
-    }
-    printf("%s = %lu, from the next sample\n", s_th_keys[key], v);
-    return 0;
-  }
-  if (strcmp(action, "show") != 0)
-  {
-    printf("ht alerts: unknown action '%s' (use show or set)\n", action);
-    return 1;
-  }
+  (void)argc;
+  (void)argv;
   if (!_load_snapshot())
     return 1;
+  heaptop_thresholds_t th;
+  heaptop_alerts_thresholds(&th);
+  const uint16_t n = heaptop_fails_copy(s_con.fails, HEAPTOP_FAIL_LEN);
   heaptop_buf_t b;
   heaptop_buf_init(&b, s_con.out, HEAPTOP_OUT_SIZE);
-  heaptop_render_alerts(&b, s_con.snap, &th);
+  heaptop_render_health(&b, s_con.snap, &th, s_con.fails, n);
   _flush(&b);
+  return 0;
+}
+
+static int _cmd_clear(int argc, char **argv)
+{
+  (void)argc;
+  (void)argv;
+  esp_err_t err = heaptop_clear();
+  if (err == ESP_ERR_INVALID_STATE)
+  {
+    printf("heaptop is not running: call heaptop_init() first\n");
+    return 1;
+  }
+  if (err != ESP_OK)
+  {
+    printf("ht clear: %s\n", esp_err_to_name(err));
+    return 1;
+  }
+  printf("stats cleared; stack high-water marks keep their since-boot minimum\n");
+  return 0;
+}
+
+static int _stress_status(void)
+{
+  heaptop_stress_status_t st;
+  heaptop_stress_status(&st);
+  if (!st.running)
+    printf("cpu stress: idle\n");
+  else if (st.left_s)
+    printf("cpu stress: %u%% on %u core%s, %lu s left\n",
+           st.pct,
+           st.workers,
+           st.workers == 1 ? "" : "s",
+           (unsigned long)st.left_s);
+  else
+    printf("cpu stress: %u%% on %u core%s until `ht stress stop`\n", st.pct, st.workers, st.workers == 1 ? "" : "s");
+  return 0;
+}
+
+static int _cmd_stress(int argc, char **argv)
+{
+  if (argc < 2)
+    return _stress_status();
+  if (strcmp(argv[1], "stop") == 0)
+  {
+    heaptop_stress_stop();
+    printf("cpu stress stopped\n");
+    return 0;
+  }
+  uint32_t pct = 0, seconds = 0;
+  if (strcmp(argv[1], "cpu") != 0 || argc < 3 || argc > 4 || !_parse_u32(argv[2], &pct) ||
+      (argc == 4 && !_parse_u32(argv[3], &seconds)))
+  {
+    printf("usage: ht stress cpu <pct> [seconds] | ht stress stop | ht stress\n");
+    return 1;
+  }
+  if (pct < 1 || pct > HEAPTOP_STRESS_MAX_PCT)
+  {
+    printf("ht stress cpu: pct must be 1..%d (the rest keeps the idle task alive)\n", HEAPTOP_STRESS_MAX_PCT);
+    return 1;
+  }
+  esp_err_t err = heaptop_stress_cpu((uint8_t)pct, seconds);
+  if (err != ESP_OK)
+  {
+    printf("ht stress cpu: %s\n", esp_err_to_name(err));
+    return 1;
+  }
+  _stress_status();
+  printf("watch it with `ht top`\n");
   return 0;
 }
 
 static const heaptop_sub_t s_subs[] = {
   {"top", "[refresh_ms]", "Live view; q quits, c/m/s/n sort, +/- refresh, p pause", _cmd_top},
-  {"frag", "[internal|dma|psram]", "Free-block size histogram of a region", _cmd_frag},
-  {"allocs", "", "Allocation rates and the last allocation failures", _cmd_allocs},
-  {"leaks", "start|stop|report [rows]|status", "Capture allocations never freed, grouped by call stack", _cmd_leaks},
-  {"mark", "", "Remember the current state as a baseline", _cmd_mark},
-  {"diff", "", "What changed since `ht mark`: region free bytes and task heap", _cmd_diff},
-  {"alerts", "[show|set <key> <value>]", "Alert limits and active alerts; 0 turns a limit off", _cmd_alerts},
+  {"heap", "", "What is used and free: regions, min free, largest block, frag", _cmd_heap},
+  {"tasks", "[cpu|heap|stack|name]", "Who uses what: CPU %, stack high-water mark, heap", _cmd_tasks},
+  {"health", "", "Every check with its value and limit, and the last failed allocations", _cmd_health},
+  {"clear", "", "Reset min free, peaks, failures and trends: a fresh window", _cmd_clear},
+  {"stress", "cpu <pct> [s] | stop", "Load every core to pct% (1..90) for s seconds, 0 = until stop", _cmd_stress},
   {"stream", "[every_ms]", "JSON Lines for host tools, one sample per line group; q stops", _cmd_stream},
-  {"heap", "", "Heap regions: free, min free, largest block, fragmentation", _cmd_heap},
-  {"tasks", "[cpu|heap|stack|name]", "Tasks: state, CPU %, stack high-water mark, heap held", _cmd_tasks},
 };
 
 static void _usage(void)
 {
   printf("usage: ht <subcommand> [args]\n");
   for (size_t i = 0; i < sizeof(s_subs) / sizeof(s_subs[0]); i++)
-    printf("  ht %-6s %-32s %s\n", s_subs[i].name, s_subs[i].args, s_subs[i].help);
+    printf("  ht %-6s %-24s %s\n", s_subs[i].name, s_subs[i].args, s_subs[i].help);
 }
 
 static int _cmd_ht(int argc, char **argv)
@@ -578,7 +477,7 @@ esp_err_t heaptop_console_register(void)
 
   const esp_console_cmd_t cmd = {
     .command = "ht",
-    .help = "heaptop: heap, fragmentation, leak and task monitor. 'ht help' lists subcommands",
+    .help = "heaptop: memory, health and CPU monitor. 'ht help' lists subcommands",
     .hint = "<subcommand> [args]",
     .func = &_cmd_ht,
   };

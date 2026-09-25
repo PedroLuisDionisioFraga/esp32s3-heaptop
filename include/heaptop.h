@@ -23,10 +23,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 #include "esp_err.h"
 #include "heaptop_types.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -36,10 +36,7 @@ extern "C"
 typedef struct heaptop_config
 {
   uint32_t sample_period_ms;       /**< Time between samples (>= 100 ms) */
-  uint32_t task_stack;             /**< Sampler task stack, bytes */
-  uint8_t task_prio;               /**< Sampler task priority; keep it low */
-  int8_t task_core;                /**< Core to pin the sampler to; -1 = no affinity */
-  heaptop_thresholds_t thresholds; /**< Alert limits; changeable later with heaptop_set_thresholds() */
+  heaptop_thresholds_t thresholds; /**< Alert limits */
 } heaptop_config_t;
 
 /** Alert limits taken from menuconfig (Component config > Heaptop > Alert thresholds). */
@@ -51,16 +48,12 @@ typedef struct heaptop_config
     .psram_free_min = CONFIG_HEAPTOP_ALERT_PSRAM_FREE_MIN,     \
     .stack_hwm_min = CONFIG_HEAPTOP_ALERT_STACK_HWM_MIN,       \
     .task_growth = CONFIG_HEAPTOP_ALERT_TASK_GROWTH,           \
-    .hysteresis_pct = CONFIG_HEAPTOP_ALERT_HYSTERESIS_PCT,     \
   }
 
 /** Configuration taken from menuconfig (Component config > Heaptop). */
 #define HEAPTOP_CONFIG_DEFAULT()                         \
   {                                                      \
     .sample_period_ms = CONFIG_HEAPTOP_SAMPLE_PERIOD_MS, \
-    .task_stack = CONFIG_HEAPTOP_TASK_STACK,             \
-    .task_prio = CONFIG_HEAPTOP_TASK_PRIO,               \
-    .task_core = CONFIG_HEAPTOP_TASK_CORE,               \
     .thresholds = HEAPTOP_THRESHOLDS_DEFAULT(),          \
   }
 
@@ -77,19 +70,23 @@ typedef void (*heaptop_alert_cb_t)(uint32_t alert, bool active, const heaptop_sn
 /**
  * @brief Start the sampler task.
  *
+ * Also registers IDF's failed-allocation callback, which has one slot:
+ * a callback the application registered before is replaced. To keep yours,
+ * register it after heaptop_init(); heaptop's failure log then stays empty.
+ *
  * @param config NULL uses HEAPTOP_CONFIG_DEFAULT().
  * @return ESP_OK, including a second call while already running;
- *         ESP_ERR_INVALID_ARG for a period below 100 ms;
+ *         ESP_ERR_INVALID_ARG for a period below 100 ms or frag_pct_max above 100;
  *         ESP_ERR_NO_MEM when the buffers or the task cannot be created.
  */
 esp_err_t heaptop_init(const heaptop_config_t *config);
 
 /**
- * @brief Stop the sampler and free every buffer. Idempotent.
+ * @brief Stop the sampler and the CPU stress workers, and free every buffer. Idempotent.
  *
  * Do not call while another task is inside heaptop_get_snapshot().
  *
- * @return ESP_OK, or ESP_ERR_TIMEOUT if the sampler did not exit (nothing freed).
+ * @return ESP_OK, or ESP_ERR_TIMEOUT if a heaptop task did not exit (nothing freed).
  */
 esp_err_t heaptop_deinit(void);
 
@@ -102,32 +99,19 @@ esp_err_t heaptop_deinit(void);
 esp_err_t heaptop_get_snapshot(heaptop_snapshot_t *out);
 
 /**
- * @brief Start capturing allocations that are not freed (heap_trace, HEAP_TRACE_LEAKS).
+ * @brief Start a fresh measurement window.
  *
- * The first call takes CONFIG_HEAPTOP_LEAK_RECORDS trace records of internal RAM
- * and keeps them until reboot. heaptop owns heap_trace while a capture runs.
+ * Resets the minimum free size of every region, task peaks, the failure count
+ * and log, alerts, trends and leak-suspicion history. Stack high-water marks
+ * keep their since-boot minimum: FreeRTOS cannot reset them.
  *
- * @return ESP_OK; ESP_ERR_INVALID_STATE if already running or heaptop is not
- *         initialised; ESP_ERR_NOT_SUPPORTED without CONFIG_HEAPTOP_LEAK_TRACE;
- *         ESP_ERR_NO_MEM for the record buffer.
+ * Takes a sample right away and returns once it is published.
+ *
+ * @return ESP_OK; ESP_ERR_INVALID_STATE if not initialised or called from the
+ *         alert callback; ESP_ERR_TIMEOUT if the sampler did not publish the
+ *         cleared sample in time (the clear still applies on a later sample).
  */
-esp_err_t heaptop_leaks_start(void);
-
-/** @brief Stop the capture; its records stay available to the report. */
-esp_err_t heaptop_leaks_stop(void);
-
-/**
- * @brief Print the capture: surviving allocations grouped by call stack, largest first.
- *
- * Works after stop, or while running as a live view: then the capture is
- * paused for the length of the report, so a block freed in that moment can
- * still be listed as surviving. Call-stack addresses are decoded to file:line
- * by idf.py monitor.
- *
- * @param out NULL for stdout.
- * @param max_groups Rows to print.
- */
-esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups);
+esp_err_t heaptop_clear(void);
 
 /**
  * @brief Register the alert callback; NULL removes it.
@@ -138,25 +122,23 @@ esp_err_t heaptop_leaks_report(FILE *out, size_t max_groups);
  */
 esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx);
 
-/** @brief Current alert limits. */
-esp_err_t heaptop_get_thresholds(heaptop_thresholds_t *out);
-
 /**
- * @brief Replace the alert limits; takes effect on the next sample.
+ * @brief Load every core to @p pct percent, for benchmarks and soak tests.
  *
- * @return ESP_OK; ESP_ERR_INVALID_ARG for NULL, frag_pct_max > 100 or hysteresis_pct > 50.
- */
-esp_err_t heaptop_set_thresholds(const heaptop_thresholds_t *th);
-
-/** @brief Remember the latest snapshot as the baseline for heaptop_diff(). */
-esp_err_t heaptop_mark(void);
-
-/**
- * @brief Print what changed since heaptop_mark(): region free bytes and per-task heap.
+ * One worker task per core (`ht_stress0`, `ht_stress1`), priority 1, busy
+ * @p pct ms of every 100 ms. Workers are created on first use and then wait,
+ * blocked, until the next run. Calling again while running replaces the load
+ * and the duration.
  *
- * @param out NULL for stdout.
+ * @param pct 1..90: the rest keeps the idle task, and its watchdog, alive.
+ * @param seconds Run time; 0 runs until heaptop_stress_stop().
+ * @return ESP_OK; ESP_ERR_INVALID_ARG for pct out of range;
+ *         ESP_ERR_NO_MEM when a worker cannot be created.
  */
-esp_err_t heaptop_diff(FILE *out);
+esp_err_t heaptop_stress_cpu(uint8_t pct, uint32_t seconds);
+
+/** @brief End the CPU load; the workers go back to waiting within 100 ms. */
+esp_err_t heaptop_stress_stop(void);
 
 /**
  * @brief Register the `ht` console command. Call after esp_console_init().

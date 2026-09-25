@@ -2,7 +2,7 @@
  * @file heaptop_alerts.c
  * @brief Threshold alerts: evaluated by the sampler, fired once per transition.
  *
- * Thresholds and the callback are written by any task and read by the sampler,
+ * Thresholds are written at init; the callback by any task. The sampler reads
  * both under a spinlock (a few words). Alert state is sampler-owned.
  */
 
@@ -41,7 +41,6 @@ static esp_err_t _validate(const heaptop_thresholds_t *th)
 {
   ESP_RETURN_ON_FALSE(th != NULL, ESP_ERR_INVALID_ARG, TAG, "thresholds is NULL");
   ESP_RETURN_ON_FALSE(th->frag_pct_max <= 100, ESP_ERR_INVALID_ARG, TAG, "frag_pct_max must be 0..100");
-  ESP_RETURN_ON_FALSE(th->hysteresis_pct <= 50, ESP_ERR_INVALID_ARG, TAG, "hysteresis_pct must be 0..50");
   return ESP_OK;
 }
 
@@ -56,22 +55,11 @@ esp_err_t heaptop_alerts_init(const heaptop_thresholds_t *th)
   return ESP_OK;
 }
 
-esp_err_t heaptop_get_thresholds(heaptop_thresholds_t *out)
+void heaptop_alerts_thresholds(heaptop_thresholds_t *out)
 {
-  ESP_RETURN_ON_FALSE(out != NULL, ESP_ERR_INVALID_ARG, TAG, "out is NULL");
   taskENTER_CRITICAL(&s_alerts.mux);
   *out = s_alerts.th;
   taskEXIT_CRITICAL(&s_alerts.mux);
-  return ESP_OK;
-}
-
-esp_err_t heaptop_set_thresholds(const heaptop_thresholds_t *th)
-{
-  ESP_RETURN_ON_ERROR(_validate(th), TAG, "invalid thresholds");
-  taskENTER_CRITICAL(&s_alerts.mux);
-  s_alerts.th = *th;
-  taskEXIT_CRITICAL(&s_alerts.mux);
-  return ESP_OK;
 }
 
 esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx)
@@ -83,12 +71,15 @@ esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx)
   return ESP_OK;
 }
 
-uint32_t heaptop_alerts_task_growth(void)
+void heaptop_alerts_clear(void)
 {
-  taskENTER_CRITICAL(&s_alerts.mux);
-  const uint32_t growth = s_alerts.th.task_growth;
-  taskEXIT_CRITICAL(&s_alerts.mux);
-  return growth;
+  /* heaptop_fails_clear() just set the failure count to 0, so 0 is the exact
+   * baseline: a failure logged before this sample reads its count still raises
+   * the alert, where re-taking the baseline from that count would swallow it.
+   * Level alerts follow their values, so a cleared leak history or a recovered
+   * minimum turns them off on their own. */
+  s_alerts.prev_failures = 0;
+  s_alerts.have_prev = true;
 }
 
 void heaptop_alerts_set_quiet(bool quiet)
@@ -110,7 +101,7 @@ void heaptop_alerts_sample(heaptop_snapshot_t *s)
   /* Failures before the first sample are history, not news. */
   if (!s_alerts.have_prev)
   {
-    s_alerts.prev_failures = s->alloc.failures;
+    s_alerts.prev_failures = s->failures;
     s_alerts.have_prev = true;
   }
   const uint32_t now = heaptop_calc_alerts(&th, s, s_alerts.active, s_alerts.prev_failures);
@@ -118,7 +109,7 @@ void heaptop_alerts_sample(heaptop_snapshot_t *s)
   const uint32_t falling = s_alerts.active & ~now;
   s->alerts = now;
   s_alerts.active = now;
-  s_alerts.prev_failures = s->alloc.failures;
+  s_alerts.prev_failures = s->failures;
 
   for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
   {

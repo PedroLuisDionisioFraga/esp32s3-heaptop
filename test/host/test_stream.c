@@ -36,7 +36,7 @@ static void _assert_json_lines(const char *text)
     TEST_ASSERT_NOT_NULL_MESSAGE(nl, "line not terminated");
     TEST_ASSERT_EQUAL_CHAR('{', line[0]);
     TEST_ASSERT_EQUAL_CHAR('}', nl[-1]);
-    TEST_ASSERT_EQUAL_INT(0, strncmp(line, "{\"ht\":1,", 8));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(line, "{\"ht\":2,", 8));
     int depth = 0;
     bool in_str = false;
     for (const char *p = line; p < nl; p++)
@@ -72,8 +72,8 @@ static void _fill(void)
   s_snap.num_cores = 2;
   s_snap.core_load_pct10[0] = 523;
   s_snap.core_load_pct10[1] = 140;
-  s_snap.features =
-    HEAPTOP_FEAT_RUNTIME_STATS | HEAPTOP_FEAT_TASK_HEAP | HEAPTOP_FEAT_ALLOC_HOOKS | HEAPTOP_FEAT_FAIL_CB;
+  s_snap.since_us = 3000000000ULL;
+  s_snap.features = HEAPTOP_FEAT_RUNTIME_STATS | HEAPTOP_FEAT_TASK_HEAP | HEAPTOP_FEAT_FAIL_CB;
   s_snap.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true,
                                                                     .total = 327680,
                                                                     .free = 204800,
@@ -82,7 +82,7 @@ static void _fill(void)
                                                                     .used_blocks = 412,
                                                                     .free_blocks = 23,
                                                                     .frag_pct10 = 460};
-  s_snap.alloc = (heaptop_alloc_stats_t){.allocs_per_s = 120, .frees_per_s = 118, .bytes_per_s = 4608, .failures = 3};
+  s_snap.failures = 3;
   s_snap.alerts = HEAPTOP_ALERT_LEAK;
 }
 
@@ -94,12 +94,12 @@ static void test_sample_line_fields(void)
   TEST_ASSERT_EQUAL_INT(1, _count_lines(s_mem));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"type\":\"sample\""));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"seq\":42"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"t_ms\":3723000"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"t_ms\":3723000,\"since_ms\":3000000"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"cpu10\":[523,140]"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"internal\":{\"total\":327680,\"free\":204800"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"frag10\":460"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"psram\":null"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"allocs_s\":120"));
+  TEST_ASSERT_NULL(strstr(s_mem, "allocs_s"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"failures\":3"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"alerts\":[\"leak\"]"));
 }
@@ -112,7 +112,6 @@ static void test_sample_line_nulls_missing_sources(void)
   heaptop_stream_sample(&s_buf, &s_snap);
   _assert_json_lines(s_mem);
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"cpu10\":null"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"allocs_s\":null"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"failures\":null"));
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "\"alerts\":[]"));
 }

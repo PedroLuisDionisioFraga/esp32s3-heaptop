@@ -182,7 +182,7 @@ void heaptop_render_tasks(heaptop_buf_t *b, const heaptop_snapshot_t *s, heaptop
                        t->leak_suspect ? "  LEAK?" : "");
   }
   if (s->tasks_truncated)
-    heaptop_buf_printf(b, "(more tasks than CONFIG_HEAPTOP_MAX_TASKS=%d; list truncated)\n", HEAPTOP_MAX_TASKS);
+    heaptop_buf_printf(b, "(more tasks than HEAPTOP_MAX_TASKS=%d; list truncated)\n", HEAPTOP_MAX_TASKS);
 }
 
 void heaptop_fmt_uptime(char *out, size_t len, uint64_t us)
@@ -297,15 +297,17 @@ static void _region_line(heaptop_buf_t *b, const heaptop_snapshot_t *s, heaptop_
   }
 }
 
-static void _alloc_rates(heaptop_buf_t *b, const heaptop_snapshot_t *s)
+/* "boot" or "clear 2m05s ago": where the current stats window starts. */
+static void _since(char *out, size_t len, const heaptop_snapshot_t *s)
 {
-  char bytes[12];
-  heaptop_fmt_bytes(bytes, sizeof(bytes), s->alloc.bytes_per_s);
-  heaptop_buf_printf(b,
-                     "allocs/s %u  frees/s %u  bytes/s %s",
-                     (unsigned)s->alloc.allocs_per_s,
-                     (unsigned)s->alloc.frees_per_s,
-                     bytes);
+  if (s->since_us == 0)
+  {
+    snprintf(out, len, "boot");
+    return;
+  }
+  char ago[24];
+  heaptop_fmt_uptime(ago, sizeof(ago), s->uptime_us > s->since_us ? s->uptime_us - s->since_us : 0);
+  snprintf(out, len, "clear %s ago", ago);
 }
 
 void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_top_view_t *view)
@@ -333,7 +335,7 @@ void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const hea
       if (s->alerts & (1u << i))
         heaptop_buf_printf(b, " %s", heaptop_alert_name(1u << i));
     }
-    heaptop_buf_printf(b, "  (ht alerts for details)\n");
+    heaptop_buf_printf(b, "  (ht health for details)\n");
   }
 
   if (s->features & HEAPTOP_FEAT_RUNTIME_STATS)
@@ -344,46 +346,14 @@ void heaptop_render_top(heaptop_buf_t *b, const heaptop_snapshot_t *s, const hea
     if (s->region[r].present)
       _region_line(b, s, (heaptop_region_t)r);
   }
-  if (s->features & HEAPTOP_FEAT_ALLOC_HOOKS)
+  if (s->features & HEAPTOP_FEAT_FAIL_CB)
   {
-    _alloc_rates(b, s);
-    if (s->features & HEAPTOP_FEAT_FAIL_CB)
-      heaptop_buf_printf(b, "  failures %u", (unsigned)s->alloc.failures);
-    heaptop_buf_printf(b, "\n");
+    char since[40];
+    _since(since, sizeof(since), s);
+    heaptop_buf_printf(b, "failures %u since %s\n", (unsigned)s->failures, since);
   }
   heaptop_buf_printf(b, "\n");
   heaptop_render_tasks(b, s, view->sort);
-}
-
-#define HEAPTOP_HIST_BAR_WIDTH 30
-
-void heaptop_render_frag(heaptop_buf_t *b, const char *name, const heaptop_frag_hist_t *h)
-{
-  static const char *const labels[HEAPTOP_FRAG_BUCKETS] = {"<64", "<256", "<1K", "<4K", "<16K", "<64K", ">=64K"};
-  if (b == NULL || name == NULL || h == NULL)
-    return;
-  if (h->free_blocks == 0)
-  {
-    heaptop_buf_printf(b, "%s: no free blocks\n", name);
-    return;
-  }
-  char total[12], largest[12];
-  heaptop_fmt_bytes(total, sizeof(total), h->free_bytes);
-  heaptop_fmt_bytes(largest, sizeof(largest), h->largest);
-  heaptop_buf_printf(b, "%s: %u free blocks, %s free, largest %s\n", name, (unsigned)h->free_blocks, total, largest);
-  heaptop_buf_printf(b, "%-7s %8s %9s  %s\n", "SIZE", "BLOCKS", "BYTES", "SHARE OF FREE BYTES");
-  for (int i = 0; i < HEAPTOP_FRAG_BUCKETS; i++)
-  {
-    char bytes[12];
-    heaptop_fmt_bytes(bytes, sizeof(bytes), h->bytes[i]);
-    int width = (int)(((uint64_t)h->bytes[i] * HEAPTOP_HIST_BAR_WIDTH) / h->free_bytes);
-    if (width == 0 && h->bytes[i] > 0)
-      width = 1;
-    char bar[HEAPTOP_HIST_BAR_WIDTH + 1];
-    for (int k = 0; k < width; k++) bar[k] = '#';
-    bar[width] = '\0';
-    heaptop_buf_printf(b, "%-7s %8u %9s  %s\n", labels[i], (unsigned)h->count[i], bytes, bar);
-  }
 }
 
 static const char *_task_name(const heaptop_snapshot_t *s, const heaptop_fail_t *f, char *hex, size_t len)
@@ -399,102 +369,6 @@ static const char *_task_name(const heaptop_snapshot_t *s, const heaptop_fail_t 
   return hex;
 }
 
-void heaptop_render_allocs(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_fail_t *fails, size_t n)
-{
-  if (b == NULL || s == NULL)
-    return;
-  if (s->features & HEAPTOP_FEAT_ALLOC_HOOKS)
-  {
-    _alloc_rates(b, s);
-    heaptop_buf_printf(b, "\n");
-  }
-  else
-  {
-    heaptop_buf_printf(b, "allocation counters off: enable CONFIG_HEAP_USE_HOOKS\n");
-  }
-
-  if (!(s->features & HEAPTOP_FEAT_FAIL_CB))
-  {
-    heaptop_buf_printf(b, "failure log off: enable CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK\n");
-    return;
-  }
-  heaptop_buf_printf(b, "failures %u since boot\n", (unsigned)s->alloc.failures);
-  if (fails == NULL || n == 0)
-    return;
-  heaptop_buf_printf(b, "LAST FAILURES (newest first)\n");
-  heaptop_buf_printf(b, "%8s %8s %10s  %-16s %s\n", "AGE", "SIZE", "CAPS", "TASK", "FUNCTION");
-  for (size_t i = 0; i < n; i++)
-  {
-    const heaptop_fail_t *f = &fails[i];
-    const uint64_t age = s->uptime_us > f->t_us ? (s->uptime_us - f->t_us) / 100000u : 0;
-    char agestr[24], size[12], hex[16]; /* agestr fits a 64-bit unsigned long: 20 digits + ".9s" */
-    snprintf(agestr, sizeof(agestr), "%lu.%lus", (unsigned long)(age / 10u), (unsigned long)(age % 10u));
-    heaptop_fmt_bytes(size, sizeof(size), f->size);
-    heaptop_buf_printf(b,
-                       "%8s %8s 0x%08lx  %-16.16s %s\n",
-                       agestr,
-                       size,
-                       (unsigned long)f->caps,
-                       _task_name(s, f, hex, sizeof(hex)),
-                       f->func ? f->func : "?");
-  }
-}
-
-void heaptop_render_leaks(heaptop_buf_t *b, const heaptop_leak_info_t *info, const heaptop_leak_group_t *groups,
-                          size_t n)
-{
-  if (b == NULL || info == NULL)
-    return;
-  if (!info->available)
-  {
-    heaptop_buf_printf(b, "leak trace off: enable CONFIG_HEAP_TRACING_STANDALONE (and CONFIG_HEAPTOP_LEAK_TRACE)\n");
-    return;
-  }
-  heaptop_buf_printf(b,
-                     "leak trace %s %lu.%lus: %lu surviving allocations (buffer %lu/%lu)\n",
-                     info->running ? "running for" : "stopped after",
-                     (unsigned long)(info->duration_ms / 1000u),
-                     (unsigned long)((info->duration_ms % 1000u) / 100u),
-                     (unsigned long)info->records,
-                     (unsigned long)info->records,
-                     (unsigned long)info->capacity);
-  if (info->overflowed)
-    heaptop_buf_printf(b,
-                       "WARNING: record buffer filled up, results are incomplete: raise CONFIG_HEAPTOP_LEAK_RECORDS\n");
-  if (info->records == 0)
-  {
-    heaptop_buf_printf(b, "no surviving allocations\n");
-    return;
-  }
-  if (groups == NULL || n == 0)
-    return; /* status only: the count above is the answer */
-
-  heaptop_buf_printf(b, "%9s %6s %10s  %s\n", "BYTES", "COUNT", "SIZE", "CALL STACK (innermost first)");
-  for (size_t i = 0; i < n; i++)
-  {
-    const heaptop_leak_group_t *g = &groups[i];
-    char bytes[12], size[24], stack[HEAPTOP_LEAK_DEPTH * 12 + 1];
-    heaptop_fmt_bytes(bytes, sizeof(bytes), g->bytes);
-    if (g->min_size == g->max_size)
-      snprintf(size, sizeof(size), "%lu", (unsigned long)g->min_size);
-    else
-      snprintf(size, sizeof(size), "%lu..%lu", (unsigned long)g->min_size, (unsigned long)g->max_size);
-    size_t used = 0;
-    stack[0] = '\0';
-    for (int k = 0; k < HEAPTOP_LEAK_DEPTH && g->pc[k] != 0; k++)
-    {
-      int w = snprintf(stack + used, sizeof(stack) - used, " 0x%08lx", (unsigned long)g->pc[k]);
-      if (w < 0 || (size_t)w >= sizeof(stack) - used)
-        break;
-      used += (size_t)w;
-    }
-    heaptop_buf_printf(b, "%9s %6lu %10s %s\n", bytes, (unsigned long)g->count, size, stack);
-  }
-  if (info->ungrouped)
-    heaptop_buf_printf(b, "(%lu more allocations from call sites beyond the table)\n", (unsigned long)info->ungrouped);
-  heaptop_buf_printf(b, "idf.py monitor decodes the 0x4... addresses into function and file:line\n");
-}
-
 static void _fmt_signed(char *out, size_t len, int64_t delta)
 {
   if (delta == 0)
@@ -506,94 +380,6 @@ static void _fmt_signed(char *out, size_t len, int64_t delta)
   const uint64_t abs = delta < 0 ? (uint64_t)(-delta) : (uint64_t)delta;
   heaptop_fmt_bytes(mag, sizeof(mag), abs > UINT32_MAX ? UINT32_MAX : (uint32_t)abs);
   snprintf(out, len, "%c%s", delta < 0 ? '-' : '+', mag);
-}
-
-static const heaptop_task_stats_t *_task_by_handle(const heaptop_snapshot_t *s, uintptr_t handle)
-{
-  for (uint16_t i = 0; i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
-  {
-    if (s->tasks[i].handle == handle)
-      return &s->tasks[i];
-  }
-  return NULL;
-}
-
-static void _diff_row(heaptop_buf_t *b, const char *name, const char *tag, const char *before, const char *now,
-                      int64_t delta)
-{
-  char label[HEAPTOP_TASK_NAME_LEN + 8], change[16];
-  snprintf(label, sizeof(label), "%s%s", name, tag);
-  _fmt_signed(change, sizeof(change), delta);
-  heaptop_buf_printf(b, "%-23s %11s %10s %10s\n", label, before, now, change);
-}
-
-void heaptop_render_diff(heaptop_buf_t *b, const heaptop_snapshot_t *before, const heaptop_snapshot_t *now)
-{
-  if (b == NULL || before == NULL || now == NULL)
-    return;
-  if (before->seq == 0)
-  {
-    heaptop_buf_printf(b, "no mark set: run `ht mark` first, then `ht diff`\n");
-    return;
-  }
-  char elapsed[24];
-  heaptop_fmt_uptime(elapsed,
-                     sizeof(elapsed),
-                     now->uptime_us > before->uptime_us ? now->uptime_us - before->uptime_us : 0);
-  heaptop_buf_printf(b,
-                     "diff over %s (sample #%lu -> #%lu)\n",
-                     elapsed,
-                     (unsigned long)before->seq,
-                     (unsigned long)now->seq);
-
-  heaptop_buf_printf(b, "%-23s %11s %10s %10s\n", "REGION", "FREE BEFORE", "FREE NOW", "CHANGE");
-  for (int r = 0; r < HEAPTOP_REGION_COUNT; r++)
-  {
-    if (!before->region[r].present && !now->region[r].present)
-      continue;
-    char was[12], is[12];
-    heaptop_fmt_bytes(was, sizeof(was), before->region[r].free);
-    heaptop_fmt_bytes(is, sizeof(is), now->region[r].free);
-    _diff_row(b, s_region_names[r], "", was, is, (int64_t)now->region[r].free - (int64_t)before->region[r].free);
-  }
-
-  if (!(now->features & HEAPTOP_FEAT_TASK_HEAP))
-  {
-    heaptop_buf_printf(b, "per-task heap: enable CONFIG_HEAP_TASK_TRACKING\n");
-    return;
-  }
-  heaptop_buf_printf(b, "\n%-23s %11s %10s %10s\n", "TASK", "HEAP BEFORE", "HEAP NOW", "CHANGE");
-  bool any = false;
-  for (uint16_t i = 0; i < now->task_count && i < HEAPTOP_MAX_TASKS; i++)
-  {
-    const heaptop_task_stats_t *t = &now->tasks[i];
-    const heaptop_task_stats_t *old = _task_by_handle(before, t->handle);
-    char was[12] = "-", is[12];
-    heaptop_fmt_bytes(is, sizeof(is), t->heap_cur);
-    if (old == NULL)
-    {
-      _diff_row(b, t->name, " (new)", was, is, (int64_t)t->heap_cur);
-      any = true;
-      continue;
-    }
-    if (old->heap_cur == t->heap_cur)
-      continue;
-    heaptop_fmt_bytes(was, sizeof(was), old->heap_cur);
-    _diff_row(b, t->name, "", was, is, (int64_t)t->heap_cur - (int64_t)old->heap_cur);
-    any = true;
-  }
-  for (uint16_t i = 0; i < before->task_count && i < HEAPTOP_MAX_TASKS; i++)
-  {
-    const heaptop_task_stats_t *old = &before->tasks[i];
-    if (_task_by_handle(now, old->handle) != NULL)
-      continue;
-    char was[12];
-    heaptop_fmt_bytes(was, sizeof(was), old->heap_cur);
-    _diff_row(b, old->name, " (gone)", was, "-", -(int64_t)old->heap_cur);
-    any = true;
-  }
-  if (!any)
-    heaptop_buf_printf(b, "no per-task heap changes\n");
 }
 
 static const char *const s_alert_names[HEAPTOP_ALERT_COUNT] = {
@@ -689,52 +475,172 @@ void heaptop_render_alert(char *out, size_t len, uint32_t alert, const heaptop_s
       break;
     }
     case HEAPTOP_ALERT_ALLOC_FAIL:
-      snprintf(out, len, "allocation failed (%lu since boot, see ht allocs)", (unsigned long)s->alloc.failures);
+    {
+      char since[40];
+      _since(since, sizeof(since), s);
+      snprintf(out, len, "allocation failed (%lu since %s, see ht health)", (unsigned long)s->failures, since);
       break;
+    }
     default:
       snprintf(out, len, "unknown alert 0x%lx", (unsigned long)alert);
       break;
   }
 }
 
-void heaptop_render_alerts(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_thresholds_t *th)
+static void _failures(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_fail_t *fails, size_t n)
+{
+  if (!(s->features & HEAPTOP_FEAT_FAIL_CB))
+  {
+    heaptop_buf_printf(b, "failure log off: the failed-allocation callback is not registered\n");
+    return;
+  }
+  char since[40];
+  _since(since, sizeof(since), s);
+  heaptop_buf_printf(b, "failures %u since %s\n", (unsigned)s->failures, since);
+  if (fails == NULL || n == 0)
+    return;
+  heaptop_buf_printf(b, "LAST FAILURES (newest first)\n");
+  heaptop_buf_printf(b, "%8s %8s %10s  %-16s %s\n", "AGE", "SIZE", "CAPS", "TASK", "FUNCTION");
+  for (size_t i = 0; i < n; i++)
+  {
+    const heaptop_fail_t *f = &fails[i];
+    const uint64_t age = s->uptime_us > f->t_us ? (s->uptime_us - f->t_us) / 100000u : 0;
+    char agestr[24], size[12], hex[16]; /* agestr fits a 64-bit unsigned long: 20 digits + ".9s" */
+    snprintf(agestr, sizeof(agestr), "%lu.%lus", (unsigned long)(age / 10u), (unsigned long)(age % 10u));
+    heaptop_fmt_bytes(size, sizeof(size), f->size);
+    heaptop_buf_printf(b,
+                       "%8s %8s 0x%08lx  %-16.16s %s\n",
+                       agestr,
+                       size,
+                       (unsigned long)f->caps,
+                       _task_name(s, f, hex, sizeof(hex)),
+                       f->func ? f->func : "?");
+  }
+}
+
+/* A value with the task it belongs to, "192 (blink)", or "-" without a task. */
+static void _with_task(char *out, size_t len, const char *value, const heaptop_task_stats_t *t)
+{
+  if (t == NULL)
+    snprintf(out, len, "-");
+  else
+    snprintf(out, len, "%s (%s)", value, t->name);
+}
+
+/* Live task that grew the most over the history window, or NULL. */
+static const heaptop_task_stats_t *_most_growth(const heaptop_snapshot_t *s)
+{
+  const heaptop_task_stats_t *top = NULL;
+  for (uint16_t i = 0; i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
+  {
+    const heaptop_task_stats_t *t = &s->tasks[i];
+    if (t->state != HEAPTOP_TASK_DELETED && (top == NULL || t->heap_growth > top->heap_growth))
+      top = t;
+  }
+  return top;
+}
+
+static void _verdict(heaptop_buf_t *b, const heaptop_snapshot_t *s)
+{
+  char since[40];
+  _since(since, sizeof(since), s);
+  unsigned active = 0;
+  for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++) active += (s->alerts >> i) & 1u;
+  if (active == 0)
+  {
+    heaptop_buf_printf(b, "health OK, stats since %s\n", since);
+    return;
+  }
+  heaptop_buf_printf(b, "health: %u alert%s (", active, active == 1 ? "" : "s");
+  bool first = true;
+  for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
+  {
+    if (s->alerts & (1u << i))
+    {
+      heaptop_buf_printf(b, "%s%s", first ? "" : ", ", s_alert_names[i]);
+      first = false;
+    }
+  }
+  heaptop_buf_printf(b, "), stats since %s\n", since);
+}
+
+void heaptop_render_health(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_thresholds_t *th,
+                           const heaptop_fail_t *fails, size_t n)
 {
   if (b == NULL || s == NULL || th == NULL)
     return;
-  const uint32_t limits[HEAPTOP_ALERT_COUNT] = {th->dram_free_min,
-                                                th->dram_largest_min,
-                                                th->frag_pct_max,
-                                                th->psram_free_min,
-                                                th->stack_hwm_min,
-                                                th->task_growth,
-                                                1};
-  const char *const units[HEAPTOP_ALERT_COUNT] = {"B", "B", "%", "B", "B", "B", ""};
+  const heaptop_region_stats_t *in = &s->region[HEAPTOP_REGION_INTERNAL];
+  const heaptop_region_stats_t *ps = &s->region[HEAPTOP_REGION_PSRAM];
+  const bool heap_ok = (s->features & HEAPTOP_FEAT_TASK_HEAP) != 0;
 
-  heaptop_buf_printf(b, "%-13s %10s  %s\n", "ALERT", "LIMIT", "STATE");
+  _verdict(b, s);
+
+  /* Current value and limit of every check, in HEAPTOP_ALERT_* bit order. */
+  const uint32_t lim[HEAPTOP_ALERT_COUNT] = {th->dram_free_min,
+                                             th->dram_largest_min,
+                                             th->frag_pct_max,
+                                             th->psram_free_min,
+                                             th->stack_hwm_min,
+                                             th->task_growth,
+                                             1};
+  char now[HEAPTOP_ALERT_COUNT][40], v[16];
+  bool have[HEAPTOP_ALERT_COUNT];
+  heaptop_fmt_bytes(now[0], sizeof(now[0]), in->free);
+  heaptop_fmt_bytes(now[1], sizeof(now[1]), in->largest);
+  _pct(now[2], sizeof(now[2]), in->frag_pct10);
+  have[0] = have[1] = have[2] = in->present;
+  heaptop_fmt_bytes(now[3], sizeof(now[3]), ps->free);
+  have[3] = ps->present;
+  const heaptop_task_stats_t *low = _lowest_stack(s);
+  heaptop_fmt_bytes(v, sizeof(v), low ? low->stack_hwm : 0);
+  _with_task(now[4], sizeof(now[4]), v, low);
+  have[4] = low != NULL;
+  const heaptop_task_stats_t *grow = _worst_leak(s);
+  if (grow == NULL)
+    grow = _most_growth(s);
+  if (grow != NULL && grow->heap_growth > 0)
+  {
+    _fmt_signed(v, sizeof(v), grow->heap_growth);
+    _with_task(now[5], sizeof(now[5]), v, grow);
+  }
+  else
+  {
+    snprintf(now[5], sizeof(now[5]), "0"); /* nothing grew: no task to name */
+  }
+  have[5] = heap_ok;
+  snprintf(now[6], sizeof(now[6]), "%u", (unsigned)s->failures);
+  have[6] = (s->features & HEAPTOP_FEAT_FAIL_CB) != 0;
+
+  heaptop_buf_printf(b, "\n%-13s %-26s %-10s %s\n", "CHECK", "NOW", "LIMIT", "STATE");
   for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
   {
     const uint32_t bit = 1u << i;
-    char limit[20];
+    char limit[24];
     if (bit == HEAPTOP_ALERT_ALLOC_FAIL)
-      snprintf(limit, sizeof(limit), "any");
-    else if (limits[i] == 0)
+      snprintf(limit, sizeof(limit), "any new");
+    else if (lim[i] == 0)
       snprintf(limit, sizeof(limit), "off");
+    else if (bit == HEAPTOP_ALERT_FRAG)
+      snprintf(limit, sizeof(limit), "<= %lu%%", (unsigned long)lim[i]);
     else
-      snprintf(limit, sizeof(limit), "%lu %s", (unsigned long)limits[i], units[i]);
+    {
+      heaptop_fmt_bytes(v, sizeof(v), lim[i]);
+      snprintf(limit, sizeof(limit), "%s %s", bit == HEAPTOP_ALERT_LEAK ? "<" : ">=", v);
+    }
+
+    const char *state = "ok";
     if (s->alerts & bit)
-    {
-      char msg[96];
-      heaptop_render_alert(msg, sizeof(msg), bit, s, th);
-      heaptop_buf_printf(b, "%-13s %10s  ACTIVE  %s\n", s_alert_names[i], limit, msg);
-    }
-    else
-    {
-      heaptop_buf_printf(b, "%-13s %10s  ok\n", s_alert_names[i], limit);
-    }
+      state = "ALERT";
+    else if (!have[i])
+      state = "n/a";
+    else if (bit != HEAPTOP_ALERT_ALLOC_FAIL && lim[i] == 0)
+      state = "off";
+    heaptop_buf_printf(b, "%-13s %-26.26s %-10s %s\n", s_alert_names[i], have[i] ? now[i] : "-", limit, state);
   }
-  heaptop_buf_printf(b,
-                     "hysteresis %lu%%: an alert clears only that far back past its limit\n",
-                     (unsigned long)th->hysteresis_pct);
-  if (s->alerts == 0)
-    heaptop_buf_printf(b, "no alerts active\n");
+  heaptop_buf_printf(b, "an alert clears once its value is %d%% back past the limit\n", HEAPTOP_HYSTERESIS_PCT);
+  if (!heap_ok)
+    heaptop_buf_printf(b, "leak check needs CONFIG_HEAP_TASK_TRACKING\n");
+
+  heaptop_buf_printf(b, "\n");
+  _failures(b, s, fails, n);
 }

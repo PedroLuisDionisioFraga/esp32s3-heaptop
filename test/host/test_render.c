@@ -299,207 +299,24 @@ static void test_top_marks_paused(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "sort stack"));
 }
 
-static void test_top_shows_alloc_rates_when_hooks_on(void)
+static void test_top_shows_failures_and_stats_window(void)
 {
   const heaptop_top_view_t view = {.sort = HEAPTOP_SORT_CPU};
   _fill_top();
-  s_snap.features |= HEAPTOP_FEAT_ALLOC_HOOKS;
-  s_snap.alloc.allocs_per_s = 120;
+  s_snap.features |= HEAPTOP_FEAT_FAIL_CB;
+  s_snap.failures = 2;
   heaptop_render_top(&s_buf, &s_snap, &view);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "allocs/s 120"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "failures 2 since boot"));
 
   heaptop_buf_init(&s_buf, s_mem, sizeof(s_mem));
-  s_snap.features &= ~HEAPTOP_FEAT_ALLOC_HOOKS;
+  s_snap.since_us = s_snap.uptime_us - 125ULL * 1000000u;
   heaptop_render_top(&s_buf, &s_snap, &view);
-  TEST_ASSERT_NULL(strstr(s_mem, "allocs/s"));
-}
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "since clear 2m05s ago"));
 
-static void test_frag_histogram_rows(void)
-{
-  heaptop_frag_hist_t h;
-  memset(&h, 0, sizeof(h));
-  h.count[0] = 5;
-  h.bytes[0] = 200;
-  h.count[6] = 1;
-  h.bytes[6] = 110592;
-  h.free_blocks = 6;
-  h.free_bytes = 110792;
-  h.largest = 110592;
-  char line[256];
-  heaptop_render_frag(&s_buf, "internal", &h);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "internal"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "6 free blocks"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "<64 ", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, " 5 "));
-  TEST_ASSERT_NOT_NULL(strstr(line, "200"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, ">=64K", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "108.0K"));
-  TEST_ASSERT_NOT_NULL(strstr(line, "#"));
-}
-
-static void test_frag_histogram_empty_region(void)
-{
-  heaptop_frag_hist_t h;
-  memset(&h, 0, sizeof(h));
-  heaptop_render_frag(&s_buf, "psram", &h);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "no free blocks"));
-}
-
-static void _fill_allocs(void)
-{
-  s_snap.features = HEAPTOP_FEAT_ALLOC_HOOKS | HEAPTOP_FEAT_FAIL_CB;
-  s_snap.uptime_us = 20ULL * 1000000u;
-  s_snap.alloc.allocs_per_s = 120;
-  s_snap.alloc.frees_per_s = 118;
-  s_snap.alloc.bytes_per_s = 4608;
-  s_snap.alloc.failures = 3;
-  _add_task("stress", 0, 1000, 0, HEAPTOP_TASK_BLOCKED);
-  s_snap.tasks[0].handle = 0x3FC90000u;
-}
-
-static void test_allocs_rates_line(void)
-{
-  _fill_allocs();
-  heaptop_render_allocs(&s_buf, &s_snap, NULL, 0);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "allocs/s 120"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "frees/s 118"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "4.5K"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "failures 3"));
-}
-
-static void test_allocs_failure_rows_resolve_task_and_isr(void)
-{
-  heaptop_fail_t f[3];
-  memset(f, 0, sizeof(f));
-  f[0] = (heaptop_fail_t){.t_us = 8000000u,
-                          .size = 10000000u,
-                          .caps = 0x1800,
-                          .func = "heap_caps_malloc",
-                          .task = 0x3FC90000u};
-  f[1] = (heaptop_fail_t){.t_us = 5000000u, .size = 64, .caps = 0x8, .func = "heap_caps_calloc", .isr = true};
-  f[2] = (heaptop_fail_t){.t_us = 1000000u, .size = 128, .caps = 0x4, .func = "heap_caps_realloc", .task = 0x3FC9FFF0u};
-  char line[256];
-  _fill_allocs();
-  heaptop_render_allocs(&s_buf, &s_snap, f, 3);
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_malloc", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "stress"));
-  TEST_ASSERT_NOT_NULL(strstr(line, "9.5M"));
-  TEST_ASSERT_NOT_NULL(strstr(line, "12.0s"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_calloc", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "(ISR)"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_realloc", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "0x3fc9fff0"));
-}
-
-static void test_allocs_reports_disabled_sources(void)
-{
-  s_snap.features = 0;
-  heaptop_render_allocs(&s_buf, &s_snap, NULL, 0);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAP_USE_HOOKS"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAPTOP_FAILED_ALLOC_CALLBACK"));
-}
-
-static void test_leaks_off_names_the_option(void)
-{
-  const heaptop_leak_info_t info = {.available = false};
-  heaptop_render_leaks(&s_buf, &info, NULL, 0);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAP_TRACING_STANDALONE"));
-}
-
-static void test_leaks_header_and_rows(void)
-{
-  const heaptop_leak_info_t info = {.available = true, .duration_ms = 30200, .records = 37, .capacity = 256};
-  heaptop_leak_group_t g[2];
-  memset(g, 0, sizeof(g));
-  g[0] = (heaptop_leak_group_t){.pc = {0x42001234, 0x42005678},
-                                .count = 36,
-                                .bytes = 9216,
-                                .min_size = 256,
-                                .max_size = 256};
-  g[1] = (heaptop_leak_group_t){.pc = {0x4200abcd}, .count = 1, .bytes = 512, .min_size = 16, .max_size = 496};
-  char line[256];
-  heaptop_render_leaks(&s_buf, &info, g, 2);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "stopped"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "30.2s"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "37 surviving"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "37/256"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "0x42001234", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "9.0K"));
-  TEST_ASSERT_NOT_NULL(strstr(line, " 36 "));
-  TEST_ASSERT_NOT_NULL(strstr(line, "0x42005678"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "0x4200abcd", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "16..496"));
-}
-
-static void test_leaks_running_overflow_and_empty(void)
-{
-  const heaptop_leak_info_t info =
-    {.available = true, .running = true, .duration_ms = 5000, .records = 0, .capacity = 256, .overflowed = true};
-  heaptop_render_leaks(&s_buf, &info, NULL, 0);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "running"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAPTOP_LEAK_RECORDS"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "no surviving allocations"));
-}
-
-static void test_leaks_status_does_not_contradict_the_count(void)
-{
-  /* `ht leaks status` asks for no rows while 58 allocations survive. */
-  const heaptop_leak_info_t info = {.available = true, .duration_ms = 30400, .records = 58, .capacity = 256};
-  heaptop_render_leaks(&s_buf, &info, NULL, 0);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "58 surviving"));
-  TEST_ASSERT_NULL(strstr(s_mem, "no surviving allocations"));
-}
-
-static heaptop_snapshot_t s_before;
-
-static void _task_in(heaptop_snapshot_t *s, const char *name, uintptr_t handle, uint32_t heap)
-{
-  heaptop_task_stats_t *t = &s->tasks[s->task_count++];
-  memset(t, 0, sizeof(*t));
-  strcpy(t->name, name);
-  t->handle = handle;
-  t->heap_cur = heap;
-}
-
-static void test_diff_regions_and_tasks(void)
-{
-  memset(&s_before, 0, sizeof(s_before));
-  s_before.seq = 10;
-  s_before.uptime_us = 10ULL * 1000000u;
-  s_before.features = HEAPTOP_FEAT_TASK_HEAP;
-  s_before.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 204800};
-  _task_in(&s_before, "wifi", 0x1, 4096);
-  _task_in(&s_before, "steady", 0x2, 1000);
-  _task_in(&s_before, "oldtask", 0x3, 2048);
-
-  s_snap.seq = 75;
-  s_snap.uptime_us = 75ULL * 1000000u;
-  s_snap.features = HEAPTOP_FEAT_TASK_HEAP;
-  s_snap.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 184320};
-  _task_in(&s_snap, "wifi", 0x1, 6144);
-  _task_in(&s_snap, "steady", 0x2, 1000);
-  _task_in(&s_snap, "newtask", 0x4, 1024);
-
-  char line[256];
-  heaptop_render_diff(&s_buf, &s_before, &s_snap);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "1m05s"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "internal", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "-20.0K"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "wifi", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "+2.0K"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "newtask", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "(new)"));
-  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "oldtask", line, sizeof(line)));
-  TEST_ASSERT_NOT_NULL(strstr(line, "(gone)"));
-  TEST_ASSERT_NULL(strstr(s_mem, "steady"));
-}
-
-static void test_diff_without_mark(void)
-{
-  memset(&s_before, 0, sizeof(s_before));
-  s_snap.seq = 5;
-  heaptop_render_diff(&s_buf, &s_before, &s_snap);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "ht mark"));
+  heaptop_buf_init(&s_buf, s_mem, sizeof(s_mem));
+  s_snap.features &= ~HEAPTOP_FEAT_FAIL_CB;
+  heaptop_render_top(&s_buf, &s_snap, &view);
+  TEST_ASSERT_NULL(strstr(s_mem, "failures"));
 }
 
 static const heaptop_thresholds_t s_th = {.dram_free_min = 20480,
@@ -507,8 +324,7 @@ static const heaptop_thresholds_t s_th = {.dram_free_min = 20480,
                                           .frag_pct_max = 80,
                                           .psram_free_min = 65536,
                                           .stack_hwm_min = 512,
-                                          .task_growth = 4096,
-                                          .hysteresis_pct = 10};
+                                          .task_growth = 4096};
 
 static void test_alert_names(void)
 {
@@ -540,22 +356,122 @@ static void test_alert_messages_carry_values(void)
   TEST_ASSERT_NOT_NULL(strstr(msg, "+12.0K"));
 }
 
-static void test_alerts_view_lists_thresholds_and_active(void)
+static void _fill_health(void)
 {
-  s_snap.alerts = HEAPTOP_ALERT_DRAM_FREE;
-  s_snap.region[HEAPTOP_REGION_INTERNAL] = (heaptop_region_stats_t){.present = true, .free = 18432};
-  heaptop_render_alerts(&s_buf, &s_snap, &s_th);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "dram_free"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "20480"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "hysteresis"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "ACTIVE"));
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "18.0K"));
+  s_snap.uptime_us = 20ULL * 1000000u;
+  s_snap.features = HEAPTOP_FEAT_TASK_HEAP | HEAPTOP_FEAT_FAIL_CB;
+  s_snap.region[HEAPTOP_REGION_INTERNAL] =
+    (heaptop_region_stats_t){.present = true, .free = 204800, .largest = 110592, .frag_pct10 = 460};
+  s_snap.region[HEAPTOP_REGION_PSRAM] = (heaptop_region_stats_t){.present = true, .free = 8388608};
+  _add_task("blink", 0, 312, 1024, HEAPTOP_TASK_BLOCKED);
+  _add_task("worker", 0, 2048, 20480, HEAPTOP_TASK_BLOCKED);
+  s_snap.tasks[0].handle = 0x3FC90000u;
+  s_snap.tasks[1].heap_growth = 3072;
 }
 
-static void test_alerts_view_none_active(void)
+static void test_health_verdict_ok_since_boot(void)
 {
-  heaptop_render_alerts(&s_buf, &s_snap, &s_th);
-  TEST_ASSERT_NOT_NULL(strstr(s_mem, "no alerts active"));
+  _fill_health();
+  heaptop_render_health(&s_buf, &s_snap, &s_th, NULL, 0);
+  TEST_ASSERT_EQUAL_INT(0, strncmp(s_mem, "health OK, stats since boot\n", 28));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "failures 0 since boot"));
+  TEST_ASSERT_NULL(strstr(s_mem, "ALERT"));
+}
+
+static void test_health_lists_every_check_with_value_and_limit(void)
+{
+  char line[256];
+  _fill_health();
+  heaptop_render_health(&s_buf, &s_snap, &s_th, NULL, 0);
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "dram_free ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "200.0K"));
+  TEST_ASSERT_NOT_NULL(strstr(line, ">= 20.0K"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "ok"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "frag ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "46.0%"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "<= 80%"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "psram_free", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "8.0M"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "stack ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "312 (blink)"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "leak ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "+3.0K (worker)"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "< 4.0K"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "alloc_fail", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "any new"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "10% back past the limit"));
+}
+
+static void test_health_names_no_task_when_nothing_grew(void)
+{
+  /* Right after ht clear every history is empty: no task to blame. */
+  char line[256];
+  _fill_health();
+  s_snap.tasks[1].heap_growth = 0;
+  heaptop_render_health(&s_buf, &s_snap, &s_th, NULL, 0);
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "leak ", line, sizeof(line)));
+  TEST_ASSERT_NULL(strstr(line, "("));
+  TEST_ASSERT_NOT_NULL(strstr(line, " 0 "));
+  TEST_ASSERT_NOT_NULL(strstr(line, "ok"));
+}
+
+static void test_health_names_active_alerts_and_clear_window(void)
+{
+  char line[256];
+  _fill_health();
+  s_snap.alerts = HEAPTOP_ALERT_FRAG | HEAPTOP_ALERT_STACK;
+  s_snap.since_us = 5ULL * 1000000u;
+  heaptop_render_health(&s_buf, &s_snap, &s_th, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "health: 2 alerts (frag, stack), stats since clear 15s ago"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "stack ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "ALERT"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "dram_free ", line, sizeof(line)));
+  TEST_ASSERT_NULL(strstr(line, "ALERT"));
+}
+
+static void test_health_marks_missing_sources(void)
+{
+  char line[256];
+  heaptop_thresholds_t th = s_th;
+  th.dram_largest_min = 0;
+  _fill_health();
+  s_snap.features = 0;
+  s_snap.region[HEAPTOP_REGION_PSRAM].present = false;
+  heaptop_render_health(&s_buf, &s_snap, &th, NULL, 0);
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "psram_free", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "n/a"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "leak ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "n/a"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "dram_largest", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "off"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "CONFIG_HEAP_TASK_TRACKING"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "failure log off"));
+}
+
+static void test_health_failure_rows_resolve_task_and_isr(void)
+{
+  heaptop_fail_t f[3];
+  memset(f, 0, sizeof(f));
+  f[0] = (heaptop_fail_t){.t_us = 8000000u,
+                          .size = 10000000u,
+                          .caps = 0x1800,
+                          .func = "heap_caps_malloc",
+                          .task = 0x3FC90000u};
+  f[1] = (heaptop_fail_t){.t_us = 5000000u, .size = 64, .caps = 0x8, .func = "heap_caps_calloc", .isr = true};
+  f[2] = (heaptop_fail_t){.t_us = 1000000u, .size = 128, .caps = 0x4, .func = "heap_caps_realloc", .task = 0x3FC9FFF0u};
+  char line[256];
+  _fill_health();
+  s_snap.failures = 3;
+  heaptop_render_health(&s_buf, &s_snap, &s_th, f, 3);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "failures 3 since boot"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_malloc", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "blink"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "9.5M"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "12.0s"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_calloc", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "(ISR)"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "heap_caps_realloc", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "0x3fc9fff0"));
 }
 
 static void test_top_banner_lists_active_alerts(void)
@@ -565,6 +481,7 @@ static void test_top_banner_lists_active_alerts(void)
   s_snap.alerts = HEAPTOP_ALERT_LEAK | HEAPTOP_ALERT_STACK;
   heaptop_render_top(&s_buf, &s_snap, &view);
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "ALERTS: stack leak"));
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "ht health"));
 
   heaptop_buf_init(&s_buf, s_mem, sizeof(s_mem));
   s_snap.alerts = 0;
@@ -577,21 +494,14 @@ int main(void)
   UNITY_BEGIN();
   RUN_TEST(test_alert_names);
   RUN_TEST(test_alert_messages_carry_values);
-  RUN_TEST(test_alerts_view_lists_thresholds_and_active);
-  RUN_TEST(test_alerts_view_none_active);
+  RUN_TEST(test_health_verdict_ok_since_boot);
+  RUN_TEST(test_health_lists_every_check_with_value_and_limit);
+  RUN_TEST(test_health_names_no_task_when_nothing_grew);
+  RUN_TEST(test_health_names_active_alerts_and_clear_window);
+  RUN_TEST(test_health_marks_missing_sources);
+  RUN_TEST(test_health_failure_rows_resolve_task_and_isr);
   RUN_TEST(test_top_banner_lists_active_alerts);
-  RUN_TEST(test_top_shows_alloc_rates_when_hooks_on);
-  RUN_TEST(test_leaks_off_names_the_option);
-  RUN_TEST(test_leaks_header_and_rows);
-  RUN_TEST(test_leaks_running_overflow_and_empty);
-  RUN_TEST(test_leaks_status_does_not_contradict_the_count);
-  RUN_TEST(test_diff_regions_and_tasks);
-  RUN_TEST(test_diff_without_mark);
-  RUN_TEST(test_frag_histogram_rows);
-  RUN_TEST(test_frag_histogram_empty_region);
-  RUN_TEST(test_allocs_rates_line);
-  RUN_TEST(test_allocs_failure_rows_resolve_task_and_isr);
-  RUN_TEST(test_allocs_reports_disabled_sources);
+  RUN_TEST(test_top_shows_failures_and_stats_window);
   RUN_TEST(test_fmt_bytes_units);
   RUN_TEST(test_buf_appends_formatted_text);
   RUN_TEST(test_buf_truncates_without_overflow);
