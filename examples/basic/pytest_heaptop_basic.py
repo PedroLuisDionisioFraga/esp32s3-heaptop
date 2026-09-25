@@ -64,8 +64,12 @@ def test_heaptop_stress_loads_every_core(dut: Dut) -> None:
     dut.expect(re.compile(rb'cpu stress: 50% on 2 cores, \d+ s left'))
     time.sleep(2.5)  # two samples with the load on
     _run(dut, 'ht tasks cpu')
-    for core in (0, 1):
-        load = float(dut.expect(re.compile(rb'ht_stress%d\s+\S+\s+\d+\s+\d+\s+([\d.]+)' % core)).group(1))
+    # Rows come sorted by CPU, so the two workers can print in either order.
+    table = dut.expect(re.compile(rb'NAME[^\n]*\n(.*?)' + dut.target.encode() + rb'> ', re.S)).group(1)
+    loads = {int(core): float(pct) for core, pct in
+             re.findall(rb'ht_stress(\d)\s+\S+\s+\d+\s+\d+\s+([\d.]+)', table)}
+    assert sorted(loads) == [0, 1], table
+    for core, load in loads.items():
         assert 35.0 <= load <= 65.0, f'ht_stress{core} at {load}%'
     time.sleep(3)
     _run(dut, 'ht stress')
