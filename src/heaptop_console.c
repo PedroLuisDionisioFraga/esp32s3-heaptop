@@ -87,6 +87,16 @@ static bool _load_snapshot(void)
   return true;
 }
 
+static bool _parse_u32(const char *s, uint32_t *out)
+{
+  char *end = NULL;
+  const unsigned long v = strtoul(s, &end, 10);
+  if (end == s || *end != '\0')
+    return false;
+  *out = (uint32_t)v;
+  return true;
+}
+
 static int _cmd_heap(int argc, char **argv)
 {
   (void)argc;
@@ -197,14 +207,13 @@ static int _cmd_top(int argc, char **argv)
   heaptop_top_view_t view = {.sort = HEAPTOP_SORT_CPU, .paused = false, .refresh_ms = 1000};
   if (argc > 1)
   {
-    char *end = NULL;
-    unsigned long ms = strtoul(argv[1], &end, 10);
-    if (end == argv[1] || *end != '\0' || ms < HEAPTOP_REFRESH_MIN_MS || ms > HEAPTOP_REFRESH_MAX_MS)
+    uint32_t ms = 0;
+    if (!_parse_u32(argv[1], &ms) || ms < HEAPTOP_REFRESH_MIN_MS || ms > HEAPTOP_REFRESH_MAX_MS)
     {
       printf("ht top: refresh must be %d..%d ms\n", HEAPTOP_REFRESH_MIN_MS, HEAPTOP_REFRESH_MAX_MS);
       return 1;
     }
-    view.refresh_ms = (uint32_t)ms;
+    view.refresh_ms = ms;
   }
   if (!_load_snapshot())
     return 1;
@@ -292,14 +301,11 @@ static int _cmd_stream(int argc, char **argv)
   uint32_t every_ms = 0; /* 0 = every sample */
   if (argc > 1)
   {
-    char *end = NULL;
-    unsigned long ms = strtoul(argv[1], &end, 10);
-    if (end == argv[1] || *end != '\0' || ms < HEAPTOP_REFRESH_MIN_MS)
+    if (!_parse_u32(argv[1], &every_ms) || every_ms < HEAPTOP_REFRESH_MIN_MS)
     {
       printf("ht stream: interval must be >= %d ms\n", HEAPTOP_REFRESH_MIN_MS);
       return 1;
     }
-    every_ms = (uint32_t)ms;
   }
   if (!_load_snapshot())
     return 1;
@@ -365,16 +371,6 @@ static int _cmd_clear(int argc, char **argv)
   }
   printf("stats cleared; stack high-water marks keep their since-boot minimum\n");
   return 0;
-}
-
-static bool _parse_u32(const char *s, uint32_t *out)
-{
-  char *end = NULL;
-  const unsigned long v = strtoul(s, &end, 10);
-  if (end == s || *end != '\0')
-    return false;
-  *out = (uint32_t)v;
-  return true;
 }
 
 static int _stress_status(void)

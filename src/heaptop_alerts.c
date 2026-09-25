@@ -73,10 +73,13 @@ esp_err_t heaptop_set_alert_cb(heaptop_alert_cb_t cb, void *ctx)
 
 void heaptop_alerts_clear(void)
 {
-  /* The failure count restarts at 0: take a new baseline instead of reading the
-   * drop as a new failure. Level alerts follow their values, so a cleared leak
-   * history or a recovered minimum turns them off on their own. */
-  s_alerts.have_prev = false;
+  /* heaptop_fails_clear() just set the failure count to 0, so 0 is the exact
+   * baseline: a failure logged before this sample reads its count still raises
+   * the alert, where re-taking the baseline from that count would swallow it.
+   * Level alerts follow their values, so a cleared leak history or a recovered
+   * minimum turns them off on their own. */
+  s_alerts.prev_failures = 0;
+  s_alerts.have_prev = true;
 }
 
 void heaptop_alerts_set_quiet(bool quiet)

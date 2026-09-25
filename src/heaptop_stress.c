@@ -118,6 +118,14 @@ esp_err_t heaptop_stress_cpu(uint8_t pct, uint32_t seconds)
                       HEAPTOP_STRESS_MAX_PCT);
   ESP_RETURN_ON_FALSE(seconds <= UINT32_MAX / configTICK_RATE_HZ, ESP_ERR_INVALID_ARG, TAG, "seconds too large");
   ESP_RETURN_ON_FALSE(_claim(), ESP_ERR_INVALID_STATE, TAG, "another stress call is running");
+  if (s_stress.exit)
+  {
+    /* A heaptop_deinit() timed out: its workers are still leaving and any new
+     * one would leave at once, so a run would do nothing. */
+    _release();
+    ESP_LOGE(TAG, "stress workers are still exiting; call heaptop_deinit() again");
+    return ESP_ERR_INVALID_STATE;
+  }
 
   esp_err_t err = _create_workers();
   if (err == ESP_OK)
@@ -145,12 +153,16 @@ void heaptop_stress_status(heaptop_stress_status_t *out)
   for (int c = 0; c < HEAPTOP_STRESS_CORES; c++) out->workers += s_stress.worker[c] != NULL;
   taskEXIT_CRITICAL(&s_stress.mux);
   out->pct = (uint8_t)s_stress.pct;
-  out->running = out->workers > 0 && s_stress.active && !_expired();
+  /* One tick reading for both the expiry test and the time left: a second one
+   * could land past the end and make run - elapsed wrap. */
   const TickType_t run = s_stress.run_ticks;
+  const TickType_t elapsed = (TickType_t)(xTaskGetTickCount() - s_stress.start);
+  const bool expired = run != 0 && elapsed >= run;
+  out->running = out->workers > 0 && s_stress.active && !s_stress.exit && !expired;
   if (out->running && run != 0)
   {
-    const TickType_t left = run - (TickType_t)(xTaskGetTickCount() - s_stress.start);
-    out->left_s = (uint32_t)((left + configTICK_RATE_HZ - 1) / configTICK_RATE_HZ);
+    const TickType_t left = run - elapsed;
+    out->left_s = (uint32_t)(left / configTICK_RATE_HZ + (left % configTICK_RATE_HZ != 0));
   }
 }
 
