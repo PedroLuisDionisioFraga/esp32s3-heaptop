@@ -402,6 +402,19 @@ static void test_health_lists_every_check_with_value_and_limit(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "10% back past the limit"));
 }
 
+static void test_health_names_no_task_when_nothing_grew(void)
+{
+  /* Right after ht clear every history is empty: no task to blame. */
+  char line[256];
+  _fill_health();
+  s_snap.tasks[1].heap_growth = 0;
+  heaptop_render_health(&s_buf, &s_snap, &s_th, NULL, 0);
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "leak ", line, sizeof(line)));
+  TEST_ASSERT_NULL(strstr(line, "("));
+  TEST_ASSERT_NOT_NULL(strstr(line, " 0 "));
+  TEST_ASSERT_NOT_NULL(strstr(line, "ok"));
+}
+
 static void test_health_names_active_alerts_and_clear_window(void)
 {
   char line[256];
@@ -483,6 +496,7 @@ int main(void)
   RUN_TEST(test_alert_messages_carry_values);
   RUN_TEST(test_health_verdict_ok_since_boot);
   RUN_TEST(test_health_lists_every_check_with_value_and_limit);
+  RUN_TEST(test_health_names_no_task_when_nothing_grew);
   RUN_TEST(test_health_names_active_alerts_and_clear_window);
   RUN_TEST(test_health_marks_missing_sources);
   RUN_TEST(test_health_failure_rows_resolve_task_and_isr);

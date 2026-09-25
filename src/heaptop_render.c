@@ -598,9 +598,16 @@ void heaptop_render_health(heaptop_buf_t *b, const heaptop_snapshot_t *s, const 
   const heaptop_task_stats_t *grow = _worst_leak(s);
   if (grow == NULL)
     grow = _most_growth(s);
-  _fmt_signed(v, sizeof(v), grow ? grow->heap_growth : 0);
-  _with_task(now[5], sizeof(now[5]), v, grow);
-  have[5] = heap_ok && grow != NULL;
+  if (grow != NULL && grow->heap_growth > 0)
+  {
+    _fmt_signed(v, sizeof(v), grow->heap_growth);
+    _with_task(now[5], sizeof(now[5]), v, grow);
+  }
+  else
+  {
+    snprintf(now[5], sizeof(now[5]), "0"); /* nothing grew: no task to name */
+  }
+  have[5] = heap_ok;
   snprintf(now[6], sizeof(now[6]), "%u", (unsigned)s->failures);
   have[6] = (s->features & HEAPTOP_FEAT_FAIL_CB) != 0;
 
