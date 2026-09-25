@@ -143,6 +143,11 @@ uint32_t heaptop_calc_peak_since(uint32_t base, uint32_t max_cur, uint32_t idf_p
   return idf_peak > base ? idf_peak : max_cur;
 }
 
+uint32_t heaptop_calc_min_since(uint32_t base, uint32_t low, uint32_t idf_min)
+{
+  return idf_min < base ? idf_min : low;
+}
+
 bool heaptop_calc_below_floor(bool active, uint32_t value, uint32_t floor, uint32_t hyst_pct)
 {
   if (floor == 0)

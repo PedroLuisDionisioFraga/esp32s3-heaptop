@@ -133,6 +133,15 @@ void heaptop_growth_clear(heaptop_growth_t *g);
  */
 uint32_t heaptop_calc_peak_since(uint32_t base, uint32_t max_cur, uint32_t idf_peak);
 
+/**
+ * @brief A region's minimum free size since the stats were cleared.
+ *
+ * The mirror of heaptop_calc_peak_since(): if IDF's since-boot minimum fell
+ * below @p base (its value at the clear), that new record is exact; otherwise
+ * the lowest sampled free size, @p low, is the best estimate.
+ */
+uint32_t heaptop_calc_min_since(uint32_t base, uint32_t low, uint32_t idf_min);
+
 /** How far back past its limit a value must go before its alert clears, in percent. */
 #define HEAPTOP_HYSTERESIS_PCT 10
 

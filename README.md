@@ -392,7 +392,7 @@ I (699) HEAPTOP: started: every 1000 ms, up to 32 tasks, 38968 bytes of buffers 
 | `HEAPTOP_STREAM_AT_BOOT` | n | JSON Lines on stdout from boot, no console needed |
 | `HEAPTOP_ALERT_*` | see [Health checks](#health-checks) | health limits |
 
-Everything else is automatic. Heaptop reads whichever IDF data sources are enabled, and it puts its buffers in PSRAM when the chip has it. It shows up to 32 tasks. To change that, define `HEAPTOP_MAX_TASKS` for the whole build, for example with `idf_build_set_property(COMPILE_DEFINITIONS "HEAPTOP_MAX_TASKS=48" APPEND)` in the project's `CMakeLists.txt`.
+Everything else is automatic. Heaptop reads whichever IDF data sources are enabled, and it puts its buffers in PSRAM when the chip has it. It shows up to 32 tasks. To change that, define `HEAPTOP_MAX_TASKS` for the whole build (never in one component only: it sets the snapshot's size), for example with `idf_build_set_property(COMPILE_DEFINITIONS "HEAPTOP_MAX_TASKS=48" APPEND)` in the project's `CMakeLists.txt`.
 
 ## Stream protocol
 
@@ -492,9 +492,9 @@ IDLE0            Y     0    0   42.1     872       0       0       0
 
 - **Tasks that delete themselves.** With `CONFIG_HEAP_TASK_TRACKING` on ESP-IDF 6.0.2, a task that calls `vTaskDelete(NULL)` while other tasks allocate or free can abort the chip with `assert failed: prvSelectHighestPriorityTaskSMP ... (xTaskScheduled == 1)`. The idle task frees the dead task's stack, and that free waits on task tracking's mutex. If another task holds the mutex, the idle task blocks, and its core has nothing left to run. Heaptop's sampler and stress workers therefore never delete themselves: they suspend, and `heaptop_deinit()` deletes them. If your firmware hits this assert, do the same, or turn task tracking off.
 - **Stack high-water marks survive `ht clear`.** FreeRTOS keeps only the since-boot minimum, so the `stack` check and the STACK column cannot start over.
-- **Minimum free after `ht clear`.** Heaptop resets it with `heap_caps_monitor_local_minimum_free_size_start()`, which affects every reader of `heap_caps_get_minimum_free_size()`. `heaptop_deinit()` restores the since-boot values. The first clear allocates a small table in IDF (a few bytes per heap).
+- **Minimum free after `ht clear`.** IDF keeps only a since-boot minimum, and heaptop leaves it alone. When free memory sets a new record low after the clear, MIN FREE is exact. Otherwise it is the lowest value heaptop sampled since the clear, and a dip between two samples can be missed.
 - **Task PEAK after `ht clear`.** IDF keeps only a since-boot peak. When a task sets a new record after the clear, PEAK is exact. Otherwise it is the highest value heaptop sampled since the clear, and a spike between two samples can be missed.
-- **Failed-allocation callback.** IDF has one slot for it, and heaptop takes it at `heaptop_init()`. If your application needs the slot, register your own callback after `heaptop_init()`. Yours replaces heaptop's, and heaptop's failure log stays empty (`ht health` shows `n/a`).
+- **Failed-allocation callback.** IDF has one slot for it, and heaptop takes it at `heaptop_init()`, replacing any callback registered before. If your application needs the slot, register your own callback after `heaptop_init()`. Yours replaces heaptop's, and heaptop's failure log stays empty (`ht health` shows `n/a`).
 - **CPU stress.** The workers busy-wait, so they burn power as well as CPU. At 90% the idle task gets 10 ms of every 100, which is enough for the task watchdog but little else at priority 0.
 - **Task tracking.** With `CONFIG_HEAP_TASK_TRACKING`, allocating while the scheduler is suspended or from an ISR crashes. That is an IDF constraint, not heaptop's. Memory is charged to the task that allocated it.
 - **Heap walks.** `heap_caps_get_info()` walks the heap with its lock held, adding interrupt latency proportional to the number of blocks. Keep the sample period at about 1 s on latency-sensitive systems.

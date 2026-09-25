@@ -27,11 +27,11 @@ uint32_t heaptop_buffer_caps(void);
 /** Fill snapshot regions from heap_caps_get_info(). Sampler task only. */
 void heaptop_heap_sample(heaptop_snapshot_t *s);
 
-/** Reset every heap's minimum free size to its free size now. Any task. */
-void heaptop_heap_clear_min(void);
+/** Report minimum free sizes since boot again. Called from heaptop_init(). */
+void heaptop_heap_init(void);
 
-/** Bring back the since-boot minimum free sizes. Any task. */
-void heaptop_heap_restore_min(void);
+/** Start the minimum-free window at the next sample. Sampler task only. */
+void heaptop_heap_clear(void);
 
 /** Allocate the task-sampling buffers. Called from heaptop_init(). */
 esp_err_t heaptop_tasks_init(uint32_t caps);

@@ -70,6 +70,10 @@ typedef void (*heaptop_alert_cb_t)(uint32_t alert, bool active, const heaptop_sn
 /**
  * @brief Start the sampler task.
  *
+ * Also registers IDF's failed-allocation callback, which has one slot:
+ * a callback the application registered before is replaced. To keep yours,
+ * register it after heaptop_init(); heaptop's failure log then stays empty.
+ *
  * @param config NULL uses HEAPTOP_CONFIG_DEFAULT().
  * @return ESP_OK, including a second call while already running;
  *         ESP_ERR_INVALID_ARG for a period below 100 ms or frag_pct_max above 100;
@@ -103,8 +107,9 @@ esp_err_t heaptop_get_snapshot(heaptop_snapshot_t *out);
  *
  * Takes a sample right away and returns once it is published.
  *
- * @return ESP_OK; ESP_ERR_INVALID_STATE if not initialised; ESP_ERR_TIMEOUT if
- *         the sampler did not pick the request up.
+ * @return ESP_OK; ESP_ERR_INVALID_STATE if not initialised or called from the
+ *         alert callback; ESP_ERR_TIMEOUT if the sampler did not publish the
+ *         cleared sample in time (the clear still applies on a later sample).
  */
 esp_err_t heaptop_clear(void);
 

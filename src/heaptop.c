@@ -54,7 +54,6 @@ typedef struct heaptop_priv
   /* --- Cross-task words: written whole by one task, read by another. --- */
   volatile bool running;   /* cleared by deinit */
   volatile bool clear_req; /* set by heaptop_clear(), cleared by the sampler once published */
-  bool min_cleared;        /* heaptop_clear() moved IDF's minimum free sizes; deinit restores them */
   TaskHandle_t task;       /* set by init, deleted and cleared by deinit */
 } heaptop_priv_t;
 
@@ -84,11 +83,11 @@ static void _push_trends(heaptop_snapshot_t *w)
     w->trend_len = heaptop_ring_copy(&s_priv.trend[k], w->trend[k], HEAPTOP_TREND_LEN);
 }
 
-/* Everything with a "since" in it starts over; the minimum free sizes were
- * already reset by heaptop_clear() in the caller's task. */
+/* Everything with a "since" in it starts over. */
 static void _apply_clear(uint64_t now_us)
 {
   _init_trends();
+  heaptop_heap_clear();
   heaptop_tasks_clear();
   heaptop_fails_clear();
   heaptop_alerts_clear();
@@ -188,6 +187,7 @@ esp_err_t heaptop_init(const heaptop_config_t *config)
   s_priv.since_us = 0;
   s_priv.clear_req = false;
   _init_trends();
+  heaptop_heap_init();
 
   const uint32_t caps = heaptop_buffer_caps();
   const size_t free_before = heap_caps_get_free_size(caps);
@@ -265,11 +265,6 @@ esp_err_t heaptop_deinit(void)
   vTaskDelete(s_priv.task); /* suspended, so freed here rather than by the idle task */
   s_priv.task = NULL;
 
-  if (s_priv.min_cleared)
-  {
-    heaptop_heap_restore_min();
-    s_priv.min_cleared = false;
-  }
   _free_buffers();
   ESP_LOGI(TAG, "stopped");
   return ESP_OK;
@@ -292,11 +287,11 @@ esp_err_t heaptop_clear(void)
 {
   if (!s_priv.running)
     return ESP_ERR_INVALID_STATE;
-
-  /* Here, not in the sampler: the first reset allocates IDF's table of
-   * since-boot minimums, and the sampler never allocates. */
-  heaptop_heap_clear_min();
-  s_priv.min_cleared = true;
+  /* From the alert callback the sampler would be waiting on itself. */
+  ESP_RETURN_ON_FALSE(xTaskGetCurrentTaskHandle() != s_priv.task,
+                      ESP_ERR_INVALID_STATE,
+                      TAG,
+                      "heaptop_clear() cannot run in the alert callback");
 
   s_priv.clear_req = true;
   xSemaphoreGive(s_priv.wake);

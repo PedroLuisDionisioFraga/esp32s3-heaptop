@@ -355,6 +355,14 @@ static void test_peak_since_clear(void)
   TEST_ASSERT_EQUAL_UINT32(12000, heaptop_calc_peak_since(9000, 3000, 12000));
 }
 
+static void test_min_since_clear(void)
+{
+  /* Cleared when IDF's minimum was 200000; the lowest sample since is 250000. */
+  TEST_ASSERT_EQUAL_UINT32(250000, heaptop_calc_min_since(200000, 250000, 200000));
+  /* A new record low after the clear is exact, even if no sample caught it. */
+  TEST_ASSERT_EQUAL_UINT32(150000, heaptop_calc_min_since(200000, 250000, 150000));
+}
+
 static heaptop_snapshot_t s_msnap;
 
 static void _live_row(uintptr_t handle, const char *name)
@@ -534,6 +542,7 @@ int main(void)
   RUN_TEST(test_growth_track_evicts_task_not_seen_last_sample);
   RUN_TEST(test_growth_clear_empties_history_and_asks_for_new_baseline);
   RUN_TEST(test_peak_since_clear);
+  RUN_TEST(test_min_since_clear);
   RUN_TEST(test_fail_copy_is_newest_first);
   RUN_TEST(test_fail_copy_after_wrap_and_limited);
   RUN_TEST(test_frag_is_zero_when_free_is_one_block);

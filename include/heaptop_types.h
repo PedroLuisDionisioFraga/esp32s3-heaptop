@@ -18,7 +18,9 @@ extern "C"
 {
 #endif
 
-/** Task rows per snapshot; define it for the whole build to change it. */
+/** Task rows per snapshot. It sets the size of heaptop_snapshot_t, so to change
+ *  it define it for the whole build (idf_build_set_property), never in one
+ *  component only: a mismatch makes heaptop_get_snapshot() overrun buffers. */
 #ifndef HEAPTOP_MAX_TASKS
 #define HEAPTOP_MAX_TASKS 32
 #endif
@@ -85,7 +87,7 @@ typedef struct heaptop_region_stats
   bool present;         /**< false when the region does not exist (e.g. no PSRAM) */
   uint32_t total;       /**< free + allocated */
   uint32_t free;        /**< free bytes now */
-  uint32_t min_free;    /**< lowest free bytes since boot */
+  uint32_t min_free;    /**< lowest free bytes since boot, or since heaptop_clear() */
   uint32_t largest;     /**< largest free block */
   uint32_t used_blocks; /**< allocated blocks */
   uint32_t free_blocks; /**< free blocks */
