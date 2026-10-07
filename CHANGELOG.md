@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-07
+
+### Added
+
+- `ht health` / health view: MIN and MAX columns, the lowest and highest value of every check since boot or `ht clear`. Snapshot fields `check_seen`, `check_min` and `check_max`.
+
 ## [0.2.0] - 2026-09-24
 
 Heaptop is now a simple memory monitor: what is used, what is free, health, a fresh window on demand, and CPU stress.
