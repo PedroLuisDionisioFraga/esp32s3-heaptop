@@ -654,8 +654,14 @@ void heaptop_render_health(heaptop_buf_t *b, const heaptop_snapshot_t *s, const 
       _fmt_check(lo, sizeof(lo), bit, s->check_min[i]);
       _fmt_check(hi, sizeof(hi), bit, s->check_max[i]);
     }
-    heaptop_buf_printf(
-      b, "%-13s %-26.26s %-8s %-8s %-10s %s\n", s_alert_names[i], have[i] ? now[i] : "-", lo, hi, limit, state);
+    heaptop_buf_printf(b,
+                       "%-13s %-26.26s %-8s %-8s %-10s %s\n",
+                       s_alert_names[i],
+                       have[i] ? now[i] : "-",
+                       lo,
+                       hi,
+                       limit,
+                       state);
   }
   heaptop_buf_printf(b, "an alert clears once its value is %d%% back past the limit\n", HEAPTOP_HYSTERESIS_PCT);
   if (!heap_ok)
