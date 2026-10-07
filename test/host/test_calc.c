@@ -516,9 +516,37 @@ static void test_alerts_keep_state_inside_hysteresis(void)
   TEST_ASSERT_EQUAL_HEX32(0, heaptop_calc_alerts(&th, &s_asnap, 0, 5));
 }
 
+static void test_check_values_and_extremes(void)
+{
+  uint32_t v[HEAPTOP_ALERT_COUNT] = {0}, lo[HEAPTOP_ALERT_COUNT] = {0}, hi[HEAPTOP_ALERT_COUNT] = {0}, seen = 0;
+  _healthy();
+  s_asnap.tasks[1].heap_growth = 700;
+  s_asnap.features |= HEAPTOP_FEAT_TASK_HEAP;
+  uint32_t have = heaptop_calc_check_values(&s_asnap, v);
+  TEST_ASSERT_EQUAL_HEX32(0x7Fu, have);
+  TEST_ASSERT_EQUAL_UINT32(100000, v[0]);
+  TEST_ASSERT_EQUAL_UINT32(2000, v[4]); /* lowest stack */
+  TEST_ASSERT_EQUAL_UINT32(700, v[5]);
+  heaptop_calc_extremes(v, have, &seen, lo, hi);
+
+  v[0] = 50000;
+  v[4] = 3500;
+  heaptop_calc_extremes(v, have, &seen, lo, hi);
+  v[0] = 80000;
+  heaptop_calc_extremes(v, have, &seen, lo, hi);
+  TEST_ASSERT_EQUAL_UINT32(50000, lo[0]);
+  TEST_ASSERT_EQUAL_UINT32(100000, hi[0]);
+  TEST_ASSERT_EQUAL_UINT32(3500, hi[4]);
+
+  s_asnap.region[HEAPTOP_REGION_PSRAM].present = false;
+  have = heaptop_calc_check_values(&s_asnap, v);
+  TEST_ASSERT_EQUAL_HEX32(0, have & HEAPTOP_ALERT_PSRAM_FREE);
+}
+
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_check_values_and_extremes);
   RUN_TEST(test_merge_fills_live_row);
   RUN_TEST(test_merge_keeps_dead_task_apart_when_handle_is_reused);
   RUN_TEST(test_merge_skips_empty_dead_and_unlisted_alive);

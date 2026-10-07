@@ -145,8 +145,11 @@ typedef struct heaptop_snapshot
   uint8_t num_cores;
   uint16_t core_load_pct10[HEAPTOP_MAX_CORES];
   heaptop_region_stats_t region[HEAPTOP_REGION_COUNT];
-  uint32_t failures;  /**< failed allocations since boot, or since heaptop_clear() */
-  uint16_t trend_len; /**< valid entries per trend series */
+  uint32_t failures;                       /**< failed allocations since boot, or since heaptop_clear() */
+  uint32_t check_seen;                     /**< bit i set when check i (HEAPTOP_ALERT_* order) has a value */
+  uint32_t check_min[HEAPTOP_ALERT_COUNT]; /**< lowest value of each check since boot, or since heaptop_clear() */
+  uint32_t check_max[HEAPTOP_ALERT_COUNT]; /**< highest value of each check, same window */
+  uint16_t trend_len;                      /**< valid entries per trend series */
   uint32_t trend[HEAPTOP_TREND_COUNT][HEAPTOP_TREND_LEN]; /**< oldest first */
   uint16_t task_count;
   bool tasks_truncated; /**< more tasks existed than HEAPTOP_MAX_TASKS */

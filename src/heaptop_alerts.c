@@ -6,6 +6,8 @@
  * both under a spinlock (a few words). Alert state is sampler-owned.
  */
 
+#include <string.h>
+
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -30,6 +32,9 @@ typedef struct heaptop_alerts_priv
   uint32_t active;
   uint32_t prev_failures;
   bool have_prev;
+  uint32_t seen; /* checks with a min/max history since boot or the last clear */
+  uint32_t lo[HEAPTOP_ALERT_COUNT];
+  uint32_t hi[HEAPTOP_ALERT_COUNT];
 
   /* --- Cross-task flag: set by `ht top` / `ht stream` while they own the terminal. --- */
   volatile bool quiet;
@@ -80,6 +85,7 @@ void heaptop_alerts_clear(void)
    * minimum turns them off on their own. */
   s_alerts.prev_failures = 0;
   s_alerts.have_prev = true;
+  s_alerts.seen = 0; /* min and max start over */
 }
 
 void heaptop_alerts_set_quiet(bool quiet)
@@ -109,6 +115,12 @@ void heaptop_alerts_sample(heaptop_snapshot_t *s)
   const uint32_t falling = s_alerts.active & ~now;
   s->alerts = now;
   s_alerts.active = now;
+
+  uint32_t v[HEAPTOP_ALERT_COUNT] = {0};
+  heaptop_calc_extremes(v, heaptop_calc_check_values(s, v), &s_alerts.seen, s_alerts.lo, s_alerts.hi);
+  s->check_seen = s_alerts.seen;
+  memcpy(s->check_min, s_alerts.lo, sizeof(s->check_min));
+  memcpy(s->check_max, s_alerts.hi, sizeof(s->check_max));
   s_alerts.prev_failures = s->failures;
 
   for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)

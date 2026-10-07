@@ -188,6 +188,7 @@ failures 0 since boot
 ```
 
 - **The first line** is the verdict. When something is wrong, it names the alerts, for example `health: 1 alert (alloc_fail)`.
+- **MIN** and **MAX** are the lowest and highest value that check has had since boot, or since `ht clear`. `-` means no sample has the value yet.
 - **NOW** is the current value, and **LIMIT** is what counts as healthy. The limits come from menuconfig.
 - **stack** is the task with the least stack left. `ipc0`/`ipc1` at about 600 bytes is normal for IDF's own tasks, which is why the limit defaults to 256.
 - **leak** is the task whose heap grew the most over its history: the last 120 samples with PSRAM, 30 without. Here `main` grew 15.3K while the console started, which is more than the limit, yet the check is ok: a leak must also grow steadily for at least 20 samples and keep what it took (see [Health checks](#health-checks)).
