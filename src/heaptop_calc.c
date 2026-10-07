@@ -214,6 +214,73 @@ uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snaps
   return out;
 }
 
+uint32_t heaptop_calc_check_values(const heaptop_snapshot_t *s, uint32_t *out)
+{
+  if (s == NULL || out == NULL)
+    return 0;
+  uint32_t have = 0;
+  const heaptop_region_stats_t *in = &s->region[HEAPTOP_REGION_INTERNAL];
+  if (in->present)
+  {
+    out[0] = in->free;
+    out[1] = in->largest;
+    out[2] = in->frag_pct10;
+    have |= HEAPTOP_ALERT_DRAM_FREE | HEAPTOP_ALERT_DRAM_LARGEST | HEAPTOP_ALERT_FRAG;
+  }
+  const heaptop_region_stats_t *ps = &s->region[HEAPTOP_REGION_PSRAM];
+  if (ps->present)
+  {
+    out[3] = ps->free;
+    have |= HEAPTOP_ALERT_PSRAM_FREE;
+  }
+
+  uint32_t min_hwm = UINT32_MAX, growth = 0;
+  const uint16_t n = s->task_count > HEAPTOP_MAX_TASKS ? HEAPTOP_MAX_TASKS : s->task_count;
+  for (uint16_t i = 0; i < n; i++)
+  {
+    const heaptop_task_stats_t *t = &s->tasks[i];
+    if (t->state == HEAPTOP_TASK_DELETED)
+      continue;
+    if (t->stack_hwm < min_hwm)
+      min_hwm = t->stack_hwm;
+    if (t->heap_growth > 0 && (uint32_t)t->heap_growth > growth)
+      growth = (uint32_t)t->heap_growth;
+  }
+  if (min_hwm != UINT32_MAX)
+  {
+    out[4] = min_hwm;
+    have |= HEAPTOP_ALERT_STACK;
+  }
+  if (s->features & HEAPTOP_FEAT_TASK_HEAP)
+  {
+    out[5] = growth;
+    have |= HEAPTOP_ALERT_LEAK;
+  }
+  if (s->features & HEAPTOP_FEAT_FAIL_CB)
+  {
+    out[6] = s->failures;
+    have |= HEAPTOP_ALERT_ALLOC_FAIL;
+  }
+  return have;
+}
+
+void heaptop_calc_extremes(const uint32_t *v, uint32_t have, uint32_t *seen, uint32_t *lo, uint32_t *hi)
+{
+  for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
+  {
+    const uint32_t bit = 1u << i;
+    if (!(have & bit))
+      continue;
+    if (!(*seen & bit))
+      lo[i] = hi[i] = v[i];
+    else if (v[i] < lo[i])
+      lo[i] = v[i];
+    else if (v[i] > hi[i])
+      hi[i] = v[i];
+    *seen |= bit;
+  }
+}
+
 static void _set_heap(heaptop_task_stats_t *t, const heaptop_heap_owner_t *o)
 {
   t->heap_cur = o->cur;

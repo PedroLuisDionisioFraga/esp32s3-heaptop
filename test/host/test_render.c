@@ -402,6 +402,25 @@ static void test_health_lists_every_check_with_value_and_limit(void)
   TEST_ASSERT_NOT_NULL(strstr(s_mem, "10% back past the limit"));
 }
 
+static void test_health_shows_min_and_max(void)
+{
+  char line[256];
+  _fill_health();
+  s_snap.check_seen = HEAPTOP_ALERT_DRAM_FREE | HEAPTOP_ALERT_FRAG;
+  s_snap.check_min[0] = 153600;
+  s_snap.check_max[0] = 307200;
+  s_snap.check_min[2] = 100;
+  s_snap.check_max[2] = 460;
+  heaptop_render_health(&s_buf, &s_snap, &s_th, NULL, 0);
+  TEST_ASSERT_NOT_NULL(strstr(s_mem, "MIN"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "dram_free ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "150.0K"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "300.0K"));
+  TEST_ASSERT_NOT_NULL(_line_with(s_mem, "frag ", line, sizeof(line)));
+  TEST_ASSERT_NOT_NULL(strstr(line, "10.0%"));
+  TEST_ASSERT_NOT_NULL(strstr(line, "46.0%"));
+}
+
 static void test_health_names_no_task_when_nothing_grew(void)
 {
   /* Right after ht clear every history is empty: no task to blame. */
@@ -496,6 +515,7 @@ int main(void)
   RUN_TEST(test_alert_messages_carry_values);
   RUN_TEST(test_health_verdict_ok_since_boot);
   RUN_TEST(test_health_lists_every_check_with_value_and_limit);
+  RUN_TEST(test_health_shows_min_and_max);
   RUN_TEST(test_health_names_no_task_when_nothing_grew);
   RUN_TEST(test_health_names_active_alerts_and_clear_window);
   RUN_TEST(test_health_marks_missing_sources);

@@ -165,6 +165,20 @@ bool heaptop_calc_above_ceiling(bool active, uint32_t value, uint32_t ceiling, u
 uint32_t heaptop_calc_alerts(const heaptop_thresholds_t *th, const heaptop_snapshot_t *s, uint32_t active,
                              uint32_t prev_failures);
 
+/**
+ * @brief The number behind each health check, in HEAPTOP_ALERT_* bit order.
+ *
+ * Bytes, except frag (x10 percent) and alloc_fail (a count). stack is the lowest stack
+ * high-water mark of live tasks; leak is the largest heap growth, 0 when nothing grew.
+ *
+ * @param[out] out HEAPTOP_ALERT_COUNT values; only the ones in the returned mask are set.
+ * @return mask of the checks that have a value (a missing region or source has none).
+ */
+uint32_t heaptop_calc_check_values(const heaptop_snapshot_t *s, uint32_t *out);
+
+/** @brief Fold @p v (the checks in @p have) into the running @p lo / @p hi; @p seen marks the checks with a history. */
+void heaptop_calc_extremes(const uint32_t *v, uint32_t have, uint32_t *seen, uint32_t *lo, uint32_t *hi);
+
 /** One IDF task-tracking entry, reduced to what heaptop shows. */
 typedef struct heaptop_heap_owner
 {

@@ -564,6 +564,19 @@ static void _verdict(heaptop_buf_t *b, const heaptop_snapshot_t *s)
   heaptop_buf_printf(b, "), stats since %s\n", since);
 }
 
+/* One min or max cell of the health table, in the unit of its check. */
+static void _fmt_check(char *out, size_t len, uint32_t bit, uint32_t v)
+{
+  if (bit == HEAPTOP_ALERT_FRAG)
+    _pct(out, len, (uint16_t)v);
+  else if (bit == HEAPTOP_ALERT_LEAK)
+    _fmt_signed(out, len, v);
+  else if (bit == HEAPTOP_ALERT_ALLOC_FAIL)
+    snprintf(out, len, "%lu", (unsigned long)v);
+  else
+    heaptop_fmt_bytes(out, len, v);
+}
+
 void heaptop_render_health(heaptop_buf_t *b, const heaptop_snapshot_t *s, const heaptop_thresholds_t *th,
                            const heaptop_fail_t *fails, size_t n)
 {
@@ -611,7 +624,7 @@ void heaptop_render_health(heaptop_buf_t *b, const heaptop_snapshot_t *s, const 
   snprintf(now[6], sizeof(now[6]), "%u", (unsigned)s->failures);
   have[6] = (s->features & HEAPTOP_FEAT_FAIL_CB) != 0;
 
-  heaptop_buf_printf(b, "\n%-13s %-26s %-10s %s\n", "CHECK", "NOW", "LIMIT", "STATE");
+  heaptop_buf_printf(b, "\n%-13s %-26s %-8s %-8s %-10s %s\n", "CHECK", "NOW", "MIN", "MAX", "LIMIT", "STATE");
   for (uint32_t i = 0; i < HEAPTOP_ALERT_COUNT; i++)
   {
     const uint32_t bit = 1u << i;
@@ -635,7 +648,14 @@ void heaptop_render_health(heaptop_buf_t *b, const heaptop_snapshot_t *s, const 
       state = "n/a";
     else if (bit != HEAPTOP_ALERT_ALLOC_FAIL && lim[i] == 0)
       state = "off";
-    heaptop_buf_printf(b, "%-13s %-26.26s %-10s %s\n", s_alert_names[i], have[i] ? now[i] : "-", limit, state);
+    char lo[16] = "-", hi[16] = "-";
+    if (have[i] && (s->check_seen & bit))
+    {
+      _fmt_check(lo, sizeof(lo), bit, s->check_min[i]);
+      _fmt_check(hi, sizeof(hi), bit, s->check_max[i]);
+    }
+    heaptop_buf_printf(
+      b, "%-13s %-26.26s %-8s %-8s %-10s %s\n", s_alert_names[i], have[i] ? now[i] : "-", lo, hi, limit, state);
   }
   heaptop_buf_printf(b, "an alert clears once its value is %d%% back past the limit\n", HEAPTOP_HYSTERESIS_PCT);
   if (!heap_ok)
