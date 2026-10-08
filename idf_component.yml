@@ -1,5 +1,5 @@
 name: "heaptop"
-version: "0.3.0"
+version: "0.3.1"
 license: "MIT"
 description: "Heaptop is an htop-like memory monitor for ESP-IDF over the serial console: what is used and free per heap region and per task, health checks (free memory, fragmentation, stack margins, leak suspects, failed allocations), a clear command for fresh measurement windows, CPU stress for benchmarks, and a JSON Lines stream."
 url: "https://github.com/PedroLuisDionisioFraga/esp32s3_heaptop"

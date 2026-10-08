@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-07
+
+### Changed
+
+- The GitHub repository is now `esp32s3_heaptop`: the links in the component manifest and the README badges point to it.
+
 ## [0.3.0] - 2026-10-07
 
 ### Added
