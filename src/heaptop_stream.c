@@ -2,34 +2,11 @@
 
 #include <stdio.h>
 
-static const char *const s_region_keys[HEAPTOP_REGION_COUNT] = {"internal", "dma", "psram"};
-static const char *const s_state_names[] = {"running", "ready", "blocked", "suspended", "deleted"};
+#include "heaptop_jsonutil.h"
 
 static void _head(heaptop_buf_t *b, const char *type)
 {
   heaptop_buf_printf(b, "{\"ht\":%d,\"type\":\"%s\"", HEAPTOP_STREAM_VERSION, type);
-}
-
-/* JSON string with quotes, backslashes and control characters escaped. */
-static void _str(heaptop_buf_t *b, const char *s)
-{
-  heaptop_buf_printf(b, "\"");
-  for (; s && *s; s++)
-  {
-    const unsigned char c = (unsigned char)*s;
-    if (c == '"' || c == '\\')
-      heaptop_buf_printf(b, "\\%c", c);
-    else if (c < 0x20)
-      heaptop_buf_printf(b, "\\u%04x", c);
-    else
-      heaptop_buf_printf(b, "%c", c);
-  }
-  heaptop_buf_printf(b, "\"");
-}
-
-static unsigned long long _ms(uint64_t us)
-{
-  return (unsigned long long)(us / 1000u);
 }
 
 void heaptop_stream_sample(heaptop_buf_t *b, const heaptop_snapshot_t *s)
@@ -40,8 +17,8 @@ void heaptop_stream_sample(heaptop_buf_t *b, const heaptop_snapshot_t *s)
   heaptop_buf_printf(b,
                      ",\"seq\":%lu,\"t_ms\":%llu,\"since_ms\":%llu,\"dt_ms\":%lu,\"self_us\":%lu",
                      (unsigned long)s->seq,
-                     _ms(s->uptime_us),
-                     _ms(s->since_us),
+                     heaptop_jsonutil_ms(s->uptime_us),
+                     heaptop_jsonutil_ms(s->since_us),
                      (unsigned long)s->dt_ms,
                      (unsigned long)s->self_us);
 
@@ -61,7 +38,7 @@ void heaptop_stream_sample(heaptop_buf_t *b, const heaptop_snapshot_t *s)
   for (int r = 0; r < HEAPTOP_REGION_COUNT; r++)
   {
     const heaptop_region_stats_t *rs = &s->region[r];
-    heaptop_buf_printf(b, "%s\"%s\":", r ? "," : "", s_region_keys[r]);
+    heaptop_buf_printf(b, "%s\"%s\":", r ? "," : "", heaptop_jsonutil_region_key(r));
     if (!rs->present)
     {
       heaptop_buf_printf(b, "null");
@@ -115,11 +92,11 @@ void heaptop_stream_task(heaptop_buf_t *b, const heaptop_snapshot_t *s, uint16_t
     const heaptop_task_stats_t *t = &s->tasks[i];
     _head(b, "task");
     heaptop_buf_printf(b, ",\"seq\":%lu,\"name\":", (unsigned long)s->seq);
-    _str(b, t->name);
+    heaptop_jsonutil_str(b, t->name);
     heaptop_buf_printf(b,
                        ",\"handle\":%lu,\"state\":\"%s\",\"prio\":%u",
                        (unsigned long)t->handle,
-                       t->state <= HEAPTOP_TASK_DELETED ? s_state_names[t->state] : "unknown",
+                       heaptop_jsonutil_state_name(t->state),
                        (unsigned)t->prio);
     if (t->core >= 0)
       heaptop_buf_printf(b, ",\"core\":%d", t->core);
@@ -151,10 +128,10 @@ void heaptop_stream_alert(heaptop_buf_t *b, const heaptop_snapshot_t *s, uint32_
   _head(b, "alert");
   heaptop_buf_printf(b,
                      ",\"t_ms\":%llu,\"alert\":\"%s\",\"active\":%s,\"msg\":",
-                     _ms(s->uptime_us),
+                     heaptop_jsonutil_ms(s->uptime_us),
                      heaptop_alert_name(alert),
                      active ? "true" : "false");
-  _str(b, msg ? msg : "");
+  heaptop_jsonutil_str(b, msg ? msg : "");
   heaptop_buf_printf(b, "}\n");
 }
 
@@ -165,10 +142,10 @@ void heaptop_stream_fail(heaptop_buf_t *b, const heaptop_snapshot_t *s, const he
   _head(b, "fail");
   heaptop_buf_printf(b,
                      ",\"t_ms\":%llu,\"size\":%lu,\"caps\":%lu,\"func\":",
-                     _ms(f->t_us),
+                     heaptop_jsonutil_ms(f->t_us),
                      (unsigned long)f->size,
                      (unsigned long)f->caps);
-  _str(b, f->func ? f->func : "?");
+  heaptop_jsonutil_str(b, f->func ? f->func : "?");
   heaptop_buf_printf(b, ",\"task\":");
   const char *name = NULL;
   for (uint16_t i = 0; !f->isr && i < s->task_count && i < HEAPTOP_MAX_TASKS; i++)
@@ -179,7 +156,7 @@ void heaptop_stream_fail(heaptop_buf_t *b, const heaptop_snapshot_t *s, const he
   if (f->isr)
     heaptop_buf_printf(b, "null");
   else if (name)
-    _str(b, name);
+    heaptop_jsonutil_str(b, name);
   else
     heaptop_buf_printf(b, "%lu", (unsigned long)f->task);
   heaptop_buf_printf(b, ",\"isr\":%s}\n", f->isr ? "true" : "false");
