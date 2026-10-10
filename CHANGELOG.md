@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-10
+
+### Added
+
+- `heaptop_json_snapshot()` (`include/heaptop_json.h`): writes a snapshot as one JSON document through a chunk callback, for a web UI or an HTTP/MQTT client. It uses the field names of the stream protocol, allocates nothing, and takes about 600 bytes of stack. Flags choose whether the tasks and the trends are included, and an optional `limits` argument reports the alert limits. The document is covered by a host test.
+
+### Changed
+
+- The JSON Lines stream and the JSON document share their string escaping and name tables (`src/heaptop_jsonutil.h`). The stream output is unchanged.
+
+### Fixed
+
+- README: the install snippet pointed at `^0.2.0`.
+
 ## [0.3.1] - 2026-10-07
 
 ### Changed
