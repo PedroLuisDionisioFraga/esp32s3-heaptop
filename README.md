@@ -55,6 +55,7 @@ ipc1             S    24    1    0.0     564      64      88       0
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Stream protocol](#stream-protocol)
+- [JSON export](#json-export)
 - [Health checks](#health-checks)
 - [API](#api)
 - [Footprint](#footprint)
@@ -312,14 +313,14 @@ Devices without a console can stream from boot with `CONFIG_HEAPTOP_STREAM_AT_BO
 Add the component:
 
 ```bash
-idf.py add-dependency "pedroluisdionisiofraga/heaptop^0.2.0"
+idf.py add-dependency "pedroluisdionisiofraga/heaptop^0.4.0"
 ```
 
 or in `main/idf_component.yml`:
 
 ```yaml
 dependencies:
-  pedroluisdionisiofraga/heaptop: "^0.2.0"
+  pedroluisdionisiofraga/heaptop: "^0.4.0"
 ```
 
 Requires ESP-IDF 6.0 or later. Then start it and register the command:
@@ -420,6 +421,49 @@ A task line is about 200 bytes and a sample line about 700, so one sample with 3
 
 **Changes from version 1** (heaptop 0.1.0): the sample line lost `allocs_s`, `frees_s` and `bytes_s`, and gained `since_ms`. `failures` now counts from the last clear.
 
+## JSON export
+
+A web page or an MQTT client wants one document per request, not a stream of lines. `heaptop_json_snapshot()` (see [include/heaptop_json.h](include/heaptop_json.h)) writes a copy from `heaptop_get_snapshot()` as one JSON object. It allocates nothing: the text is built in a 512-byte buffer on the caller's stack and handed to a sink function in chunks, so a handler can send it with `httpd_resp_send_chunk()` without a body buffer on the heap it is measuring.
+
+The field names are those of the [stream protocol](#stream-protocol), with the same units: bytes, `*10` fields are percent × 10, `t_ms` is uptime in milliseconds, `null` means the data source is disabled or the region does not exist. The object has `ht`, `seq`, `t_ms`, `since_ms`, `period_ms`, `dt_ms`, `self_us`, `features` (the `HEAPTOP_FEAT_*` bits), `cpu10[]`, `regions`, `failures` and `alerts[]`, and:
+
+| Present when | Fields |
+|---|---|
+| `limits` is not NULL | `limits.{dram_free_min,dram_largest_min,frag_pct_max,psram_free_min,stack_hwm_min,task_growth}`: the limits you gave `heaptop_init()` |
+| `HEAPTOP_JSON_TRENDS` | `trend.{len,internal_free[],internal_largest[]}`, plus `psram_free[]` when the chip has PSRAM. Oldest sample first, up to 40 |
+| `HEAPTOP_JSON_TASKS` | `tasks[]` with `name`, `state`, `prio`, `core`, `cpu10`, `hwm`, and `heap`, `peak`, `psram`, `growth`, `leak` only when task tracking is on; then `tasks_truncated` |
+
+Unlike a stream task line, a task object has no `handle` and no `seq`. The size depends on the task count: roughly 80 bytes per task without task tracking, and one to one and a half KB for the rest (an estimate from the format; measure yours).
+
+An ESP-IDF HTTP handler:
+
+```c
+#include "esp_http_server.h"
+#include "heaptop.h"
+#include "heaptop_json.h"
+
+static heaptop_thresholds_t s_limits;  // the thresholds you passed to heaptop_init()
+
+static bool send_chunk(const char *data, size_t len, void *ctx)
+{
+  return httpd_resp_send_chunk((httpd_req_t *)ctx, data, (ssize_t)len) == ESP_OK;
+}
+
+static esp_err_t memory_get(httpd_req_t *req)
+{
+  static heaptop_snapshot_t snap;  // about 2 KB: too big for the HTTP server's stack
+  if (heaptop_get_snapshot(&snap) != ESP_OK || snap.seq == 0)
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no sample yet");
+
+  httpd_resp_set_type(req, "application/json");
+  if (!heaptop_json_snapshot(&snap, &s_limits, HEAPTOP_JSON_ALL, send_chunk, req))
+    return ESP_FAIL;  // the client went away
+  return httpd_resp_send_chunk(req, NULL, 0);
+}
+```
+
+The `static` copy is safe because the HTTP server runs every handler on one task. If more than one task can serialize, give each its own copy or guard it with a lock. Pass a copy rather than the live snapshot: a slow client would otherwise hold the lock that the sampler needs.
+
 ## Health checks
 
 | Check | Fires when | Kconfig default |
@@ -453,6 +497,7 @@ See [include/heaptop.h](include/heaptop.h) and [include/heaptop_types.h](include
 |---|---|
 | `heaptop_init(cfg)` / `heaptop_deinit()` | start / stop the sampler (idempotent) |
 | `heaptop_get_snapshot(&s)` | copy of the latest sample: regions, tasks, trends, failures, alerts |
+| `heaptop_json_snapshot(&s, limits, flags, sink, ctx)` | write such a copy as one JSON document, in chunks (see [JSON export](#json-export)) |
 | `heaptop_clear()` | start a fresh window |
 | `heaptop_set_alert_cb(cb, ctx)` | be told when a check fires or clears |
 | `heaptop_stress_cpu(pct, seconds)` / `heaptop_stress_stop()` | CPU load on every core |
