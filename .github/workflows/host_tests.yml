@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # The pure modules (calc, render, stream) need only a C compiler and Unity.
+      # The pure modules (calc, render, stream, json) need only a C compiler and Unity.
       - name: Fetch Unity
         run: git clone --depth 1 --branch v2.6.0 https://github.com/ThrowTheSwitch/Unity.git unity
 
